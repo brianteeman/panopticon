@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,7 +11,8 @@ defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Container;
 use Akeeba\Panopticon\Library\Cache\CallbackController;
-use Akeeba\Panopticon\Library\PhpVersion\PhpVersion;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
+use Akeeba\Panopticon\Library\SoftwareVersions\PhpVersion;
 use Awf\Date\Date;
 use Awf\Input\Input;
 use Awf\Mvc\Model;
@@ -178,7 +179,7 @@ class Main extends Model
 		return $averageDelay;
 	}
 
-	public function getKnownJoomlaVersions(): array
+	public function getKnownCMSVersions(?string $siteType = null): array
 	{
 		/** @var Container $container */
 		$container = $this->container;
@@ -189,31 +190,87 @@ class Main extends Model
 		);
 
 		return $cacheController->get(
-			callback: function (): array {
+			callback: function () use ($siteType): array {
 				$db    = $this->container->db;
 				$query = $db->getQuery(true);
 				$query
 					->select(
-						'DISTINCT SUBSTR(SUBSTRING_INDEX(' .
-						$query->jsonExtract($db->quoteName('config'), '$.core.current.version') .
-						', ' . $db->quote('.') . ', 2) FROM 2) AS ' .
-						$db->quoteName('version')
+							[
+								'DISTINCT SUBSTR(SUBSTRING_INDEX(' .
+								$query->jsonExtract($db->quoteName('config'), '$.core.current.version') .
+								', ' . $db->quote('.') . ', 2) FROM 2) AS ' .
+								$db->quoteName('version'),
+								'IFNULL(' .
+								$query->jsonExtract($db->qn('config'), '$.cmsType') .
+								',' .
+								$db->quote(CMSType::JOOMLA->value) .
+								') AS ' . $db->quoteName('cmsType')
+							]
 					)
 					->from($db->quoteName('#__sites'))
 					->where($db->quoteName('enabled') . ' = 1')
 					->order($db->quoteName('version') . ' DESC');
-				$versions = $db->setQuery($query)->loadColumn();
+
+				if ($siteType === CMSType::JOOMLA->value)
+				{
+					$query->where(
+						'(' .
+						$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' = ' . $db->quote(CMSType::JOOMLA->value) .
+						' OR ' .
+						$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' IS NULL' .
+						')'
+					);
+				}
+				elseif (!empty($siteType))
+				{
+					$query->where(
+						$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' = ' . $db->quote($siteType)
+					);
+				}
+
+				$versions = $db->setQuery($query)->loadObjectList();
 
 				if (empty($versions))
 				{
 					return [];
 				}
 
-				uasort($versions, fn($a, $b) => version_compare($a ?? '', $b ?? ''));
+				// Remove sites which have failed to load.
+				$versions = array_filter($versions);
 
-				return array_combine($versions, $versions);
+				// Separate per CMS
+				$temp = [];
+
+				foreach ($versions as $versionObject) {
+					$type = trim($versionObject->cmsType, '"');
+					$temp[$type] ??= [];
+					$temp[$type][] = $versionObject->version;
+				}
+
+				$types = array_keys($temp);
+
+				foreach ($types as $type)
+				{
+					uasort($temp[$type], function ($a, $b) {
+						version_compare($a ?? '0.0.0', $b ?? '0.0.0');
+					});
+				}
+
+				asort($types);
+
+				$versions = [];
+
+				foreach ($types as $type)
+				{
+					foreach ($temp[$type] as $item)
+					{
+						$versions[$type . '.' . $item] = (CMSType::tryFrom($type)?->forHumans() ?? '(???)') . ' ' . $item;
+					}
+				}
+
+				return $versions;
 			},
-			id: 'known_joomla_versions',
+			id: 'known_' . ($siteType ?? 'all_cms') . '_versions',
 			expiration: 60
 		);
 	}

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -156,6 +156,36 @@ class Captive extends Controller
 			);
 			$message    = $this->getLanguage()->text('PANOPTICON_MFA_ERR_INVALID_CODE');
 			$this->setRedirect($captiveURL, $message, 'error');
+
+			// Optionally count this as a login failure
+			if ($this->getContainer()->appConfig->get('mfa_counts_as_login_failure', 0))
+			{
+				$loginFailureModel = $this->getContainer()->mvcFactory->makeModel('Loginfailures');
+				$loginFailureModel->logFailure(true);
+			}
+
+			// Apply Maximum MFA tries
+			$maxMFATries  = (int) $this->getContainer()->appConfig->get('mfa_max_tries', 3);
+			$maxMFATries  = min(max($maxMFATries, 1), 10000);
+			$currentTries = (int) $this->getContainer()->segment->get('panopticon.mfa.tries', 0);
+
+			$this->getContainer()->segment->set('panopticon.mfa.tries', ++$currentTries);
+
+			if ($currentTries >= $maxMFATries)
+			{
+				$logger   = $this->container->loggerFactory->get('login');
+				$manager  = $this->container->userManager;
+				$username = $manager->getUser()->getUsername();
+				$router   = $this->container->router;
+
+				$logger->info('Logged out (maximum MFA tries)', ['username' => $username]);
+				$manager->logoutUser();
+
+				$this->setRedirect(
+					$router->route('index.php?view=login'),
+					$this->getContainer()->language->text('PANOPTICON_APP_ERR_MFA_LOGOUT')
+				);
+			}
 
 			return true;
 		}

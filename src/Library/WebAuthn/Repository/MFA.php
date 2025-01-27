@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,7 +11,6 @@ use Akeeba\Panopticon\Factory;
 use Akeeba\Panopticon\Model\Mfa as MfaModel;
 use Awf\Container\ContainerAwareInterface;
 use Awf\Container\ContainerAwareTrait;
-use Awf\Mvc\DataModel;
 use Webauthn\PublicKeyCredentialSource;
 use Webauthn\PublicKeyCredentialSourceRepository;
 use Webauthn\PublicKeyCredentialUserEntity;

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -34,6 +34,7 @@ class Setup extends Model
 		'logrotate'                  => '@daily',
 		'databasebackup'             => '@daily',
 		'ssltlsexpiration'           => '@daily',
+		'domainexpiration'           => '0 0 * * 1',
 		'usagestats'                 => '0 */12 * * *',
 		'selfupdatefinder'           => '0 */6 * * *',
 		'refreshsiteinfo'            => '*/15 * * * *',
@@ -41,6 +42,9 @@ class Setup extends Model
 		'joomlaupdatedirector'       => '*/3 * * * *',
 		'extensionupdatesdirector'   => '*/10 * * * *',
 		'sendmail'                   => '* * * * *',
+		'uptimemonitor'              => '* * * * *$-1',
+		'wordpressupdatedirector'    => '*/3 * * * *',
+		'pluginupdatesdirector'      => '*/10 * * * *',
 	];
 
 	private static bool|null $isRequiredMet = null;
@@ -453,7 +457,7 @@ class Setup extends Model
 
 		if (function_exists('opcache_invalidate'))
 		{
-			opcache_invalidate(APATH_ROOT . '/config.php', true);
+			opcache_invalidate(APATH_CONFIGURATION . '/config.php', true);
 		}
 	}
 
@@ -560,13 +564,20 @@ class Setup extends Model
 			/** @var Task $task */
 			$task = $this->container->mvcFactory->makeModel('Task');
 
-			$task->save([
-				'site_id'         => null,
-				'type'            => $type,
-				'cron_expression' => $cronExpression,
-				'enabled'         => 1,
-				'last_exit_code'  => Status::INITIAL_SCHEDULE->value,
-			]);
+			$parts          = explode('$', $cronExpression, 2);
+			$cronExpression = $parts[0];
+			$priority       = (int) ($parts[1] ?? 0);
+
+			$task->save(
+				[
+					'site_id'         => null,
+					'type'            => $type,
+					'cron_expression' => $cronExpression,
+					'enabled'         => 1,
+					'last_exit_code'  => Status::INITIAL_SCHEDULE->value,
+					'priority'        => $priority,
+				]
+			);
 		}
 	}
 
@@ -578,6 +589,7 @@ class Setup extends Model
 					->select([
 						$db->quoteName('type'),
 						$db->quoteName('cron_expression'),
+						$db->quoteName('priority'),
 					])
 					->from($db->quoteName('#__tasks'))
 					->where(
@@ -594,6 +606,10 @@ class Setup extends Model
 
 		foreach (self::DEFAULT_TASKS as $type => $cronExpression)
 		{
+			$parts          = explode('$', $cronExpression, 2);
+			$cronExpression = $parts[0];
+			$priority       = (int) ($parts[1] ?? 0);
+
 			$installed = $installedTypes[$type] ?? null;
 
 			if ($installed === null)
@@ -603,7 +619,7 @@ class Setup extends Model
 				break;
 			}
 
-			if ($installed->cron_expression != $cronExpression)
+			if ($installed->cron_expression != $cronExpression || $installed->priority != $priority)
 			{
 				$dirty = true;
 

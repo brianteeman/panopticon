@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -13,7 +13,6 @@ use Akeeba\Panopticon\Controller\Trait\ACLTrait;
 use Akeeba\Panopticon\Exception\AccessDenied;
 use Akeeba\Panopticon\Model\Site;
 use Awf\Mvc\DataController;
-use Awf\Mvc\Model;
 use Awf\Uri\Uri;
 
 class Overrides extends DataController

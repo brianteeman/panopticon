@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -12,6 +12,7 @@ defined('AKEEBA') || die;
 use Akeeba\Panopticon\CliCommand\Attribute\ConfigAssertion;
 use Akeeba\Panopticon\CliCommand\Trait\PrintFormattedArrayTrait;
 use Akeeba\Panopticon\Factory;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Model\Overrides;
 use Akeeba\Panopticon\Model\Sites;
 use RuntimeException;
@@ -50,6 +51,13 @@ class SiteOverridesList extends AbstractCommand
 		catch (RuntimeException)
 		{
 			$this->ioStyle->error('No such site');
+
+			return Command::FAILURE;
+		}
+
+		if ($site->cmsType() !== CMSType::JOOMLA)
+		{
+			$this->ioStyle->error('This command only applies to Joomla! sites');
 
 			return Command::FAILURE;
 		}

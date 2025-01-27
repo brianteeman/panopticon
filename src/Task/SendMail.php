@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,6 +9,7 @@ namespace Akeeba\Panopticon\Task;
 
 defined('AKEEBA') || die;
 
+use Akeeba\Panopticon\Factory;
 use Akeeba\Panopticon\Library\Queue\QueueTypeEnum;
 use Akeeba\Panopticon\Library\Task\AbstractCallback;
 use Akeeba\Panopticon\Library\Task\Attribute\AsTask;
@@ -42,8 +43,14 @@ class SendMail extends AbstractCallback
 			$fallbackLanguage = $sendingParams->get('language', 'en-GB');
 			$variables        = $sendingParams->get('email_variables', []);
 			$variablesByLang  = (array) $sendingParams->get('email_variables_by_lang', []);
-			$permissions      = $sendingParams->get('permissions');
+			$permissions      = $sendingParams->get('permissions', []) ?? [];
+			$permissions      = is_array($permissions) ? $permissions : [];
+			$recipientId      = $sendingParams->get('recipient_id', null);
 			$cc               = $sendingParams->get('email_cc');
+			$cc               = is_array($cc) ? $cc : array_filter(array_map('trim', explode(',', $cc)));
+			$mailGroups       = $sendingParams->get('email_groups', null);
+			$mailGroups       = empty($mailGroups) ? null : array_filter(ArrayHelper::toInteger($mailGroups));
+			$onlyMailGroups   = (bool) $sendingParams->get('only_email_groups', false);
 
 			if (empty($template))
 			{
@@ -77,17 +84,36 @@ class SendMail extends AbstractCallback
 				$site = null;
 			}
 
-			$recipients = $this->getRecipientsByPermissions($permissions, $site);
-
-			if (empty($recipients))
+			if ($recipientId)
 			{
-				$this->logger->debug(
-					sprintf(
-						'Not sending email template %s for site %d; no recipients',
-						$template, $queueItem->getSiteId()
-					)
-				);
-				continue;
+				$user = Factory::getContainer()->userManager->getUser($recipientId);
+
+				if ($user?->getId() != $recipientId)
+				{
+					continue;
+				}
+
+				$recipients = [
+					[$user->getEmail(), $user->getName(), $user->getParameters()->toString()]
+				];
+			}
+			else
+			{
+				$recipients =
+					$onlyMailGroups
+						? $this->getRecipientsByPermissions([], null, $mailGroups)
+						: $this->getRecipientsByPermissions($permissions, $site, $mailGroups);
+
+				if (empty($recipients))
+				{
+					$this->logger->debug(
+						sprintf(
+							'Not sending email template %s for site %d; no recipients',
+							$template, $queueItem->getSiteId()
+						)
+					);
+					continue;
+				}
 			}
 
 			// Distribute recipients by language
@@ -198,11 +224,21 @@ class SendMail extends AbstractCallback
 					continue;
 				}
 
+				$firstRecipient = true;
+
 				foreach ($recipients as $recipient)
 				{
 					[$email, $name] = $recipient;
 
-					$mailer->addRecipient($email, $name);
+					if ($firstRecipient)
+					{
+						$firstRecipient = false;
+						$mailer->addRecipient($email, $name);
+					}
+					else
+					{
+						$mailer->addBCC($email, $name);
+					}
 				}
 
 				// Send the email
@@ -217,7 +253,7 @@ class SendMail extends AbstractCallback
 						)
 					);
 				}
-				catch (\PHPMailer\PHPMailer\Exception $e)
+				catch (\Throwable $e)
 				{
 					$this->logger->error(
 						sprintf(
@@ -238,7 +274,8 @@ class SendMail extends AbstractCallback
 		return Status::OK->value;
 	}
 
-	private function getRecipientsByPermissions(array $permissions, ?Site $site = null): array
+	private function getRecipientsByPermissions(array $permissions, ?Site $site = null, ?array $mailGroups = null
+	): array
 	{
 		$db = $this->container->db;
 
@@ -262,8 +299,7 @@ class SendMail extends AbstractCallback
 
 			$query->andWhere(
 				array_map(
-					fn($permission) => 'JSON_SEARCH(' . $db->quoteName('privileges') . ', ' . $db->quote('one') . ',' .
-					                   $db->quote($permission) . ')',
+					fn($permission) => 'JSON_SEARCH(' . $db->quoteName('privileges') . ', ' . $db->quote('one') . ',' . $db->quote($permission) . ')',
 					$permissions
 				)
 			);
@@ -271,6 +307,10 @@ class SendMail extends AbstractCallback
 			$groupIDs = $db->setQuery($query)->loadColumn();
 		}
 
+		// Combine all groups
+		$groupIDs = array_unique(array_merge($groupIDs, $mailGroups ?? []));
+
+		// Get the query
 		$query = $db->getQuery(true)
 			->select(
 				[
@@ -281,6 +321,7 @@ class SendMail extends AbstractCallback
 			)
 			->from($db->quoteName('#__users'));
 
+		// Look for permissions...
 		foreach ($permissions as $permission)
 		{
 			$query
@@ -290,6 +331,7 @@ class SendMail extends AbstractCallback
 				);
 		}
 
+		// ...or any of the group IDs
 		foreach ($groupIDs as $groupID)
 		{
 			$query

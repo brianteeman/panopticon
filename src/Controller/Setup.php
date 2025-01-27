@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -12,9 +12,7 @@ defined('AKEEBA') || die;
 use Akeeba\Panopticon\Application\BootstrapUtilities;
 use Akeeba\Panopticon\Controller\Trait\ACLTrait;
 use Akeeba\Panopticon\Model\Setup as SetupModel;
-use Awf\Filesystem\Factory as FilesystemFactory;
 use Awf\Mvc\Controller;
-use Awf\Text\Text;
 use Awf\Uri\Uri;
 use Awf\Utils\Template;
 use Exception;
@@ -96,18 +94,6 @@ class Setup extends Controller
 
 			// Apply configuration settings to app config
 			$model->setSetupParameters();
-
-			/**
-			 * Try to connect to (S)FTP, if something like that was configured in the previous page.
-			 *
-			 * If it fails we get a nice exception to throw us to the previous page.
-			 *
-			 * @noinspection PhpUnusedLocalVariableInspection
-			 */
-			$fs          = FilesystemFactory::getAdapter($this->container, false);
-			$sessionPath = $this->container->session->getSavePath();
-
-			$this->container->application->createOrUpdateSessionPath($sessionPath, false);
 		}
 		catch (Exception $e)
 		{
@@ -183,7 +169,7 @@ class Setup extends Controller
 
 			if (function_exists('opcache_invalidate'))
 			{
-				opcache_invalidate(APATH_ROOT . '/config.php', true);
+				opcache_invalidate(APATH_CONFIGURATION . '/config.php', true);
 			}
 
 			// Redirect to the CRON setup page – we're done here
@@ -261,7 +247,7 @@ class Setup extends Controller
 
 		if (function_exists('opcache_invalidate'))
 		{
-			opcache_invalidate(APATH_ROOT . '/config.php', true);
+			opcache_invalidate(APATH_CONFIGURATION . '/config.php', true);
 		}
 
 		$model->installDefaultTasks();
@@ -302,7 +288,7 @@ class Setup extends Controller
 
 		if (function_exists('opcache_invalidate'))
 		{
-			opcache_invalidate(APATH_ROOT . '/config.php', true);
+			opcache_invalidate(APATH_CONFIGURATION . '/config.php', true);
 		}
 
 		$model->installDefaultTasks();

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,16 +9,17 @@ namespace Akeeba\Panopticon\Task;
 
 defined('AKEEBA') || die;
 
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Task\AbstractCallback;
 use Akeeba\Panopticon\Library\Task\Attribute\AsTask;
 use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Model\Site;
-use Akeeba\Panopticon\Model\Task;
 use Akeeba\Panopticon\Task\Trait\ApiRequestTrait;
 use Akeeba\Panopticon\Task\Trait\JsonSanitizerTrait;
+use Akeeba\Panopticon\Task\Trait\SaveSiteTrait;
 use Awf\Registry\Registry;
 use Awf\Utils\ArrayHelper;
-use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Promise\PromiseInterface;
 use GuzzleHttp\Promise\Utils;
 use Psr\Http\Message\ResponseInterface;
 
@@ -30,17 +31,12 @@ class RefreshInstalledExtensions extends AbstractCallback
 {
 	use ApiRequestTrait;
 	use JsonSanitizerTrait;
+	use SaveSiteTrait;
 
 	public function __invoke(object $task, Registry $storage): int
 	{
-		if ($task instanceof Task)
-		{
-			$params = ($task->params instanceof Registry) ? $task->params : new Registry($task->params);
-		}
-		else
-		{
-			$params = new Registry();
-		}
+		$params = $task?->params ?? null;
+		$params = ($params instanceof Registry) ? $params : new Registry($params);
 
 		$limitStart   = (int) $storage->get('limitStart', 0);
 		$limit        = (int) $storage->get('limit', $params->get('limit', 10));
@@ -205,41 +201,89 @@ class RefreshInstalledExtensions extends AbstractCallback
 					)
 				);
 
-				$uriPath = '/index.php/v1/panopticon/extensions?page[limit]=10000';
-
-				if ($forceUpdates)
+				switch ($site->cmsType())
 				{
-					$uriPath .= '&force=1';
+					case CMSType::JOOMLA:
+						$uriPath = '/index.php/v1/panopticon/extensions?page[limit]=10000';
+
+						if ($forceUpdates)
+						{
+							$uriPath .= '&force=1';
+						}
+
+						[$url, $options] = $this->getRequestOptions($site, $uriPath);
+
+						$promise = $httpClient->getAsync($url, $options);
+						$promise = $this->promisePostProcJoomla($promise, $site);
+
+						return $promise;
+
+					case CMSType::WORDPRESS:
+						[$url, $options] = $this->getRequestOptions($site, '/v1/panopticon/extensions');
+
+						$promise = $httpClient->getAsync($url, $options);
+						$promise = $this->promisePostProcWordPress($promise, $site);
+
+						return $promise;
+
+					default:
+						$this->logger->notice(
+							sprintf(
+								'Unknown CMS type \'%s\' for site #%d (%s)',
+								$site->cmsType()->value ?? '(unknown)',
+								$site->id,
+								$site->name
+							)
+						);
+
+						return null;
 				}
+			},
+			$siteIDs
+		);
 
-				[$url, $options] = $this->getRequestOptions($site, $uriPath);
+		$promises = array_filter($promises);
 
-				return $httpClient
-					// See https://docs.guzzlephp.org/en/stable/quickstart.html#async-requests and https://docs.guzzlephp.org/en/stable/request-options.html
-					->getAsync($url, $options)
-					->then(
-						function (ResponseInterface $response) use ($site) {
+		if (empty($promises))
+		{
+			return;
+		}
+
+		Utils::settle($promises)->wait(true);
+
+		// After storing all extensions we need to bust the cache of all known extensions
+		$this->logger->debug('Clearing cache of all known extensions (pool ‘extensions’, item ‘all’)');
+		$this->container->cacheFactory->pool('extensions')->delete('all');
+	}
+
+	private function promisePostProcJoomla(PromiseInterface $promise, Site $site): PromiseInterface
+	{
+		return $promise
+			->then(
+				function (ResponseInterface $response) use ($site) {
+					try
+					{
+						$rawData  = $this->sanitizeJson($response->getBody()->getContents());
+						$document = @json_decode($rawData);
+					}
+					catch (\Exception $e)
+					{
+						$document = null;
+					}
+
+					$data = $document?->data;
+
+					$this->saveSite(
+						$site,
+						function (Site $site) use ($data, $rawData) {
 							$config = $site->getConfig();
-
-							try
-							{
-								$rawData  = $this->sanitizeJson($response->getBody()->getContents());
-								$document = @json_decode($rawData);
-							}
-							catch (\Exception $e)
-							{
-								$document = null;
-							}
-
-							$data = $document?->data;
-
 							$config->set('extensions.lastErrorMessage', null);
 
 							if (empty($data))
 							{
 								$this->logger->notice(
 									sprintf(
-										'Could not retrieve information for site #%d (%s). Invalid data returned from API call.',
+										'Could not retrieve information for Joomla! site #%d (%s). Invalid data returned from API call.',
 										$site->id, $site->name
 									)
 								);
@@ -256,13 +300,13 @@ class RefreshInstalledExtensions extends AbstractCallback
 							{
 								$this->logger->debug(
 									sprintf(
-										'Retrieved information for site #%d (%s).',
+										'Retrieved information for Joomla! site #%d (%s).',
 										$site->id,
 										$site->name
 									)
 								);
 
-								$extensions = $this->mapExtensionsList(
+								$extensions = $this->mapJoomlaExtensionsList(
 									array_filter(
 										array_map(fn($item) => $item?->attributes, $data)
 									)
@@ -292,118 +336,159 @@ class RefreshInstalledExtensions extends AbstractCallback
 								$config->set('extensions.hasUpdates', $hasUpdates);
 							}
 
-							// Save the configuration (three tries)
-							$retry = -1;
+							$site->config = $config->toString();
+						}
+					);
 
-							do
-							{
-								try
-								{
-									$retry++;
-
-									$site->save(
-										[
-											'config' => $config->toString(),
-										]
-									);
-
-									if ($retry > 0)
-									{
-										$this->logger->error(
-											sprintf(
-												'Succeeded saving the extensions information for site #%d (%s) upon successful API call on retry number %u',
-												$site->id, $site->name, $retry
-											)
-										);
-									}
-
-									break;
-								}
-								catch (\Exception $e)
-								{
-									if ($retry >= 3)
-									{
-										$this->logger->error(
-											sprintf(
-												'Error saving the extensions information for site #%d (%s) upon successful API call: %s',
-												$site->id, $site->name, $e->getMessage()
-											)
-										);
-
-										break;
-									}
-
-									$this->logger->warning(
-										sprintf(
-											'Failed saving the extensions information for site #%d (%s) upon successful API call (will retry): %s',
-											$site->id, $site->name, $e->getMessage()
-										)
-									);
-
-									sleep($retry);
-								}
-							} while ($retry < 3);
-
-							// Finally, clear the cache of known extensions for the specific site
-							$cacheKey = 'site.' . $site->id;
-							$this->logger->debug(
-								sprintf(
-									'Clearing cache of known extensions for site %d (pool ‘extensions’, item ‘%s’)',
-									$site->id,
-									$cacheKey
-								)
-							);
-							$this->container->cacheFactory->pool('extensions')->delete($cacheKey);
-						},
-						function (RequestException $e) use ($site) {
+					// Finally, clear the cache of known extensions for the specific site
+					$cacheKey = 'site.' . $site->id;
+					$this->logger->debug(
+						sprintf(
+							'Clearing cache of known extensions for Joomla! site %d (pool ‘extensions’, item ‘%s’)',
+							$site->id,
+							$cacheKey
+						)
+					);
+					$this->container->cacheFactory->pool('extensions')->delete($cacheKey);
+				},
+				function (\Throwable $e) use ($site) {
+					$this->saveSite(
+						$site,
+						function (Site $site) use ($e) {
 							$this->logger->error(
 								sprintf(
-									'Could not retrieve extensions information for site #%d (%s). The server replied with the following error: %s',
+									'Could not retrieve extensions information for Joomla! site #%d (%s). The server replied with the following error: %s',
 									$site->id, $site->name, $e->getMessage()
 								)
 							);
 
 							$config = $site->getConfig();
 							$config->set('extensions.lastErrorMessage', $e->getMessage());
+							$site->config = $config;
+						}
+					);
+				}
+			);
+	}
 
-							try
+	private function promisePostProcWordPress(PromiseInterface $promise, Site $site): PromiseInterface
+	{
+		return $promise
+			->then(
+				function (ResponseInterface $response) use ($site) {
+					try
+					{
+						$rawData  = $this->sanitizeJson($response->getBody()->getContents());
+						$document = @json_decode($rawData);
+					}
+					catch (\Exception $e)
+					{
+						$document = null;
+					}
+
+					$this->saveSite(
+						$site,
+						function (Site $site) use ($document, $rawData) {
+							$config = $site->getConfig();
+							$config->set('extensions.lastErrorMessage', null);
+
+							if (
+								empty($document)
+								|| !is_object($document)
+								|| ($document->plugins ?? null) === null
+								|| !is_array($document->plugins)
+								|| ($document->themes ?? null) === null
+								|| !is_array($document->themes)
+							)
 							{
-								$site->save(
-									[
-										'config' => $config->toString(),
-									]
-								);
-							}
-							catch (\Exception $e)
-							{
-								$this->logger->error(
+								$this->logger->notice(
 									sprintf(
-										'Error saving the extension information for site #%d (%s) upon failed API call: %s',
-										$site->id, $site->name, $e->getMessage()
+										'Could not retrieve information for WordPress site #%d (%s). Invalid data returned from API call.',
+										$site->id, $site->name
+									)
+								);
+
+								$config->set(
+									'extensions.lastErrorMessage',
+									sprintf(
+										"Invalid (non-JSON) data returned from the WordPress API. Probably a third party plugin is breaking the WordPress JSON API application? Raw data as follows:\n\n%s",
+										$rawData ?: '(no data)'
 									)
 								);
 							}
+							else
+							{
+								$this->logger->debug(
+									sprintf(
+										'Retrieved information for WordPress site #%d (%s).',
+										$site->id,
+										$site->name
+									)
+								);
+
+								$extensions = array_merge(
+									$this->mapWordPressPluginsList(array_filter($document->plugins ?: [])),
+									$this->mapWordPressThemesList(array_filter($document->themes ?: []))
+								);
+
+								$config->set('extensions.list', (object) $extensions);
+
+								// Save a flag for the existence of updates
+								$hasUpdates = array_reduce(
+									$extensions,
+									function (bool $carry, object $item): int {
+										$current = $item?->version?->current;
+										$new     = $item?->version?->new;
+
+										if ($carry || empty($current) || empty($new))
+										{
+											return $carry;
+										}
+
+										return version_compare($current, $new, 'lt');
+									},
+									false
+								);
+
+								$config->set('extensions.hasUpdates', $hasUpdates);
+							}
+
+							$site->config = $config->toString();
 						}
 					);
-			},
-			$siteIDs
-		);
 
-		$promises = array_filter($promises);
+					// Finally, clear the cache of known extensions for the specific site
+					$cacheKey = 'site.' . $site->id;
+					$this->logger->debug(
+						sprintf(
+							'Clearing cache of known extensions for WordPress site %d (pool ‘extensions’, item ‘%s’)',
+							$site->id,
+							$cacheKey
+						)
+					);
+					$this->container->cacheFactory->pool('extensions')->delete($cacheKey);
+				},
+				function (\Throwable $e) use ($site) {
+					$this->saveSite(
+						$site,
+						function (Site $site) use ($e) {
+							$this->logger->error(
+								sprintf(
+									'Could not retrieve extensions information for WordPress site #%d (%s). The server replied with the following error: %s',
+									$site->id, $site->name, $e->getMessage()
+								)
+							);
 
-		if (empty($promises))
-		{
-			return;
-		}
-
-		Utils::settle($promises)->wait(true);
-
-		// After storing all extensions we need to bust the cache of all known extensions
-		$this->logger->debug('Clearing cache of all known extensions (pool ‘extensions’, item ‘all’)');
-		$this->container->cacheFactory->pool('extensions')->delete('all');
+							$config = $site->getConfig();
+							$config->set('extensions.lastErrorMessage', $e->getMessage());
+							$site->config = $config;
+						}
+					);
+				}
+			);
 	}
 
-	private function mapExtensionsList(array $items): array
+	private function mapJoomlaExtensionsList(array $items): array
 	{
 		if (empty($items))
 		{
@@ -419,7 +504,7 @@ class RefreshInstalledExtensions extends AbstractCallback
 		);
 
 		return array_map(
-			fn($item) => (object)[
+			fn($item) => (object) [
 				'extension_id'   => $item?->extension_id ?? null,
 				'name'           => $item?->name ?? null,
 				'description'    => $item?->description ?? null,
@@ -433,7 +518,7 @@ class RefreshInstalledExtensions extends AbstractCallback
 				'enabled'        => $item?->enabled ?? null,
 				'protected'      => $item?->protected ?? null,
 				'locked'         => $item?->locked ?? null,
-				'version'        => (object)[
+				'version'        => (object) [
 					'current' => $item?->version ?? null,
 					'new'     => $item?->new_version ?? null,
 				],
@@ -442,7 +527,7 @@ class RefreshInstalledExtensions extends AbstractCallback
 				'authorEmail'    => $item?->authorEmail ?? null,
 				'hasUpdateSites' => !empty($item?->updatesites ?? null),
 				'naughtyUpdates' => $item?->naughtyUpdates ?? null,
-				'downloadkey' => (object) [
+				'downloadkey'    => (object) [
 					'supported'   => $item?->downloadkey?->supported ?? false,
 					'valid'       => $item?->downloadkey?->valid ?? false,
 					'value'       => $item?->downloadkey?->value ?? '',
@@ -452,7 +537,8 @@ class RefreshInstalledExtensions extends AbstractCallback
 						? []
 						: array_filter(
 							array_map(
-								fn($updatesite) => $updatesite?->update_site_id ?? null, (array)($item?->updatesites ?: [])
+								fn($updatesite) => $updatesite?->update_site_id ?? null,
+								(array) ($item?->updatesites ?: [])
 							)
 						),
 				],
@@ -460,4 +546,101 @@ class RefreshInstalledExtensions extends AbstractCallback
 			$items
 		);
 	}
+
+	private function mapWordPressPluginsList(array $items): array
+	{
+		if (empty($items))
+		{
+			return [];
+		}
+
+		return array_map(
+			function ($item): object {
+				if (str_contains($item?->id ?? '', '/'))
+				{
+					[$folder, $element] = explode('/', $item?->id ?? '/');
+				}
+				else
+				{
+					$folder = $item?->id ?? '';
+					$element = null;
+				}
+
+				return (object) [
+					'extension_id'   => $item?->id ?? null,
+					'name'           => $item?->name ?? null,
+					'description'    => $item?->description ?? null,
+					'type'           => 'plugin',
+					'element'        => $element,
+					'folder'         => $folder,
+					'client_id'      => 1,
+					'type_s'         => 'Plugin',
+					'folder_s'       => $folder,
+					'client_s'       => 'WordPress',
+					'enabled'        => $item?->enabled ?? null,
+					'protected'      => false,
+					'locked'         => false,
+					'version'        => (object) [
+						'current' => $item?->version ?? null,
+						'new'     => $item?->update?->new_version ?? null,
+					],
+					'author'         => $item?->author ?? null,
+					'authorUrl'      => $item?->author_uri ?? null,
+					'authorEmail'    => null,
+					'hasUpdateSites' => true,
+					'naughtyUpdates' => false,
+					'update'         => is_object($item?->update) ? (object) [
+						'infourl'     => $item->update->url ?? null,
+						'downloadurl' => $item->update->package ?? null,
+						'version'     => $item->update->new_version ?? null,
+					] : null,
+				];
+			},
+			$items
+		);
+	}
+
+	private function mapWordPressThemesList(array $items): array
+	{
+		if (empty($items))
+		{
+			return [];
+		}
+
+		return array_map(
+			function ($item): object {
+				return (object) [
+					'extension_id'   => $item?->id ?? null,
+					'name'           => $item?->name ?? null,
+					'description'    => $item?->description ?? null,
+					'type'           => 'template',
+					'element'        => $item?->id ?? null,
+					'folder'         => null,
+					'client_id'      => 1,
+					'type_s'         => 'Theme',
+					'folder_s'       => null,
+					'client_s'       => 'WordPress',
+					'enabled'        => true,
+					'protected'      => false,
+					'locked'         => false,
+					'version'        => (object) [
+						'current' => $item?->version ?? null,
+						'new'     => $item?->update?->new_version ?? null,
+					],
+					'author'         => $item?->author ?? null,
+					'authorUrl'      => $item?->author_uri ?? null,
+					'authorEmail'    => null,
+					'hasUpdateSites' => true,
+					'naughtyUpdates' => false,
+					'update'         => is_object($item?->update) ? (object) [
+						'infourl'     => $item->update->url ?? null,
+						'downloadurl' => $item->update->package ?? null,
+						'version'     => $item->update->new_version ?? null,
+					] : null,
+				];
+			},
+			$items
+		);
+	}
+
 }

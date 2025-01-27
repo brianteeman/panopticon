@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -10,7 +10,7 @@ namespace Akeeba\Panopticon\View\Main;
 defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Library\Enumerations\JoomlaUpdateRunState;
-use Akeeba\Panopticon\Library\JoomlaVersion\JoomlaVersion;
+use Akeeba\Panopticon\Library\SoftwareVersions\JoomlaVersion;
 use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\View\Trait\AkeebaBackupTooOldTrait;
 use Awf\Mvc\DataModel\Collection;
@@ -47,7 +47,8 @@ class Json extends BaseView
 			function (Site $site) {
 				$siteConfig      = $site->getConfig();
 				$cmsType         = $site->cmsType();
-				$extensions      = get_object_vars($siteConfig->get('extensions.list', new \stdClass()));
+				$extensionsList  = $siteConfig->get('extensions.list', new \stdClass());
+				$extensions      = get_object_vars($extensionsList);
 				$currentVersion  = $siteConfig->get('core.current.version');
 				$latestVersion   = $siteConfig->get('core.latest.version');
 				$eol             = false;
@@ -86,7 +87,8 @@ class Json extends BaseView
 				{
 					case 'joomla':
 						$jVersionHelper  = new JoomlaVersion($this->getContainer());
-						$eol             = $jVersionHelper->isEOLMajor($currentVersion)
+						$eol             = empty($currentVersion)
+						                   || $jVersionHelper->isEOLMajor($currentVersion)
 						                   || $jVersionHelper->isEOLBranch($currentVersion);
 						$cmsUpdateStatus = match ($site->getJoomlaUpdateRunState())
 						{
@@ -136,8 +138,9 @@ class Json extends BaseView
 						'isPro'       => !empty($siteConfig->get('akeebabackup.info.api')),
 						'noRecord'    => empty($siteConfig->get('akeebabackup.latest')),
 						'meta'        => $siteConfig->get('akeebabackup.latest')?->meta ?? null,
-						'tooOld'      => $this->isTooOldBackup($siteConfig->get('akeebabackup.latest'), $siteConfig)
+						'tooOld'      => $this->isTooOldBackup($siteConfig->get('akeebabackup.latest'), $siteConfig),
 					],
+					'uptime'            => $this->getContainer()->helper->uptime->status($site)->asArray(),
 				];
 			}
 		);

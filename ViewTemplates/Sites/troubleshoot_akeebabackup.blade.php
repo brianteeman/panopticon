@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -74,6 +74,23 @@ $isJoomla3       = str_ends_with(rtrim($this->item->url, '/'), '/panopticon_api'
     <p>
         @lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_BODY')
     </p>
+    <details class="text-info mb-3">
+        <summary class="mb-1">
+            <span class="fa fa-question-circle" aria-hidden="true"></span>
+            <span>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_TIPS')</span>
+        </summary>
+        <ul class="text-body">
+            @if($this->item->cmsType() === CMSType::JOOMLA)
+                <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_TIP_1')</li>
+                <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_TIP_2')</li>
+                <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_TIP_3')</li>
+            @else
+                <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_TIP_1_WP')</li>
+                <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_TIP_2_WP')</li>
+                <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_TIP_3_WP')</li>
+            @endif
+        </ul>
+    </details>
 @else
     {{-- Akeeba Backup JSON API error --}}
     <p class="fw-semibold">

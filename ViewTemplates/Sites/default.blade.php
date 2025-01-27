@@ -1,17 +1,19 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
-defined('AKEEBA') || die;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 
+defined('AKEEBA') || die;
 /**
  * @var \Akeeba\Panopticon\View\Sites\Html $this
  * @var \Akeeba\Panopticon\Model\Site      $model
  * @var \Akeeba\Panopticon\Model\Site      $site
  */
+
 $model = $this->getModel();
 $token = $this->container->session->getCsrfToken()->getValue();
 ?>
@@ -34,29 +36,29 @@ $token = $this->container->session->getCsrfToken()->getValue();
         </div>
         {{-- Groups --}}
         @if (!empty($this->groupMap))
-        <div class="input-group choice-large">
-            <label for="group" class="form-label visually-hidden">@lang('PANOPTICON_MAIN_LBL_FILTER_GROUPS')</label>
-            {{ $this->container->html->select->genericList(
-                data: array_combine(
-                    array_merge([''], array_keys($this->groupMap)),
-                    array_merge([$this->getLanguage()->text('PANOPTICON_MAIN_LBL_FILTER_GROUPS_PLACEHOLDER')], array_values($this->groupMap)),
-                ),
-                name: 'group[]',
-                attribs: array_merge([
-                    'class' => 'form-select js-choice',
-                    'multiple' => 'multiple',
-                    'style' => 'min-width: min(20em, 50%)'
-                ]),
-                selected: array_filter($this->getModel()->getState('group', []) ?: [])
-            ) }}
-            <button type="submit"
-                    class="btn btn-primary">
-                <span class="fa fa-search" aria-hidden="true"></span>
-                <span class="visually-hidden">
+            <div class="input-group choice-large">
+                <label for="group" class="form-label visually-hidden">@lang('PANOPTICON_MAIN_LBL_FILTER_GROUPS')</label>
+                {{ $this->container->html->select->genericList(
+                    data: array_combine(
+                        array_merge([''], array_keys($this->groupMap)),
+                        array_merge([$this->getLanguage()->text('PANOPTICON_MAIN_LBL_FILTER_GROUPS_PLACEHOLDER')], array_values($this->groupMap)),
+                    ),
+                    name: 'group[]',
+                    attribs: array_merge([
+                        'class' => 'form-select js-choice',
+                        'multiple' => 'multiple',
+                        'style' => 'min-width: min(20em, 50%)'
+                    ]),
+                    selected: array_filter($this->getModel()->getState('group', []) ?: [])
+                ) }}
+                <button type="submit"
+                        class="btn btn-primary">
+                    <span class="fa fa-search" aria-hidden="true"></span>
+                    <span class="visually-hidden">
                     @lang('PANOPTICON_LBL_FORM_SEARCH')
                 </span>
-            </button>
-        </div>
+                </button>
+            </div>
         @endif
     </div>
 
@@ -85,7 +87,8 @@ $token = $this->container->session->getCsrfToken()->getValue();
         </tr>
         </thead>
         <tbody>
-        <?php $i = 1 ?>
+		<?php
+		$i = 1 ?>
         @foreach($this->items as $site)
             <tr>
                 <td>
@@ -98,6 +101,7 @@ $token = $this->container->session->getCsrfToken()->getValue();
                         </a>
                     </div>
                     <div class="small mt-1">
+                        @include('Common/sitetype', ['site' => $site])
                         <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_URL_SCREENREADER')</span>
                         <span class="text-secondary">
                             {{{ $site->getBaseUrl() }}}
@@ -159,6 +163,55 @@ $token = $this->container->session->getCsrfToken()->getValue();
         </tr>
         </tfoot>
     </table>
+
+    <!-- Modal -->
+    <div class="modal fade" id="batchModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="batchModalLabel">@lang('PANOPTICON_SITES_BATCH_TITLE')</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@lang('PANOPTICON_APP_LBL_MESSAGE_CLOSE')"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row mt-3 mb-4">
+                        <label for="name" class="col-sm-3 col-form-label">
+                            @lang('PANOPTICON_SITES_BATCH_LBL_ADD_TO_GROUP')
+                        </label>
+                        <div class="col-sm-6">
+                            {{ $this->container->html->select->genericList(
+                                data: $this->getModel()->getGroupsForSelect(includeEmpty: true),
+                                name: 'groups[]',
+                                attribs: [
+                                    'class' => 'form-select js-choice',
+                                    'multiple' => 'multiple',
+                                ],
+                                selected: []
+                            ) }}
+                        </div>
+                    </div>
+                    <div class="row mt-3 mb-4">
+                        <label for="name" class="col-sm-3 col-form-label">
+                            @lang('PANOPTICON_SITES_BATCH_LBL_REMOVE_FROM_GROUP')
+                        </label>
+                        <div class="col-sm-6">
+                            {{ $this->container->html->select->genericList(
+                                data: $this->getModel()->getGroupsForSelect(includeEmpty: true),
+                                name: 'groups_remove[]',
+                                attribs: [
+                                    'class' => 'form-select js-choice',
+                                    'multiple' => 'multiple',
+                                ],
+                                selected: []
+                            ) }}
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" onclick="akeeba.System.submitForm('batch')">@lang('PANOPTICON_SITES_BATCH_PROCESS')</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <input type="hidden" name="boxchecked" id="boxchecked" value="0">
     <input type="hidden" name="task" id="task" value="browse">

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -231,7 +231,7 @@ $this->getContainer()->application->getDocument()->addScriptDeclaration($js);
 							</span>
 								</td>
 								<td>
-							<span class="badge <?= $option['current'] == $option['recommended'] ? 'bg-success' : 'bg-warning' ?>">
+							<span class="badge <?= $option['current'] == $option['recommended'] ? 'bg-success' : 'text-bg-warning' ?>">
 								<span class="fa <?= $option['current'] == $option['recommended'] ? 'fa-check-circle' : 'fa-times-circle' ?>" aria-hidden="true"></span>
 								<?= $option['current'] ? $this->getLanguage()->text('AWF_YES') : $this->getLanguage()->text('AWF_NO') ?>
 							</span>

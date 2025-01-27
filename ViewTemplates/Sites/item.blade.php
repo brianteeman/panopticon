@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -24,6 +24,9 @@ $favIcon = $this->item->getFavicon(asDataUrl: true, onlyIfCached: true);
              alt="">
     @endif
     <span class="flex-grow-1">{{{ $this->item->name }}}</span>
+    @if (!empty($this->siteConfig->get('whois')))
+        @include('Sites/item_whois')
+    @endif
     @if (!empty($this->siteConfig->get('ssl')))
         @include('Sites/item_ssl')
     @endif
@@ -105,7 +108,13 @@ $favIcon = $this->item->getFavicon(asDataUrl: true, onlyIfCached: true);
 
     <div class="row g-3 mb-3">
         <div class="col-12">
-            @include('Sites/item_extensions')
+            @if ($this->item->cmsType() === CMSType::JOOMLA)
+                {{-- Joomla! sites --}}
+                @include('Sites/item_extensions')
+            @elseif ($this->item->cmsType() === CMSType::WORDPRESS)
+                {{-- WordPress sites --}}
+                @include('Sites/item_wpplugins')
+            @endif
         </div>
     </div>
 

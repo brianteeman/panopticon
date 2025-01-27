@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -38,10 +38,15 @@ trait AdminToolsIntegrationTrait
 
 			if ($result->didChange)
 			{
-				$config = $model->getConfig();
-				$config->set('core.admintools.renamed', $result->renamed);
-				$model->setFieldValue('config', $config->toString());
-				$model->save();
+				$this->saveSite(
+					$model,
+					function (Site $site) use ($result)
+					{
+						$config = $site->getConfig();
+						$config->set('core.admintools.renamed', $result->renamed);
+						$site->setFieldValue('config', $config->toString());
+					}
+				);
 			}
 
 			// Redirect
@@ -90,10 +95,14 @@ trait AdminToolsIntegrationTrait
 
 			if ($result->didChange)
 			{
-				$config = $model->getConfig();
-				$config->set('core.admintools.renamed', $result->renamed);
-				$model->setFieldValue('config', $config->toString());
-				$model->save();
+				$this->saveSite(
+					$model,
+					function (Site $model) use ($result) {
+						$config = $model->getConfig();
+						$config->set('core.admintools.renamed', $result->renamed);
+						$model->setFieldValue('config', $config->toString());
+					}
+				);
 			}
 
 			// Redirect
@@ -224,7 +233,6 @@ trait AdminToolsIntegrationTrait
 			sprintf('index.php?view=site&task=read&id=%d', $model->getId())
 		);
 
-		Ip::setAllowIpOverrides(true);
 		$myIp = Ip::getUserIP();
 
 		try

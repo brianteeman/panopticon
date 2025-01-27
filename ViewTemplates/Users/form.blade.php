@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -35,11 +35,11 @@ JS;
       name="adminForm" id="adminForm"
       class="row g-2"
 >
-    <div class="row g-2">
+    <div class="row g-2 {{ $this->collapseForMFA || $this->collapseForPasskey ? 'collapse' : '' }}">
         <div class="col-12 col-lg-6">
             <div class="card card-body">
                 <p class="card-title fs-5 fw-semibold mt-1 mb-3">
-                    Basic information
+                    @lang('PANOPTICON_USERS_LBL_FIELD_BASICINFO')
                 </p>
 
                 <div class="row my-2">
@@ -90,7 +90,7 @@ JS;
                         >
                         @if($model->getId())
                             <div class="form-text">
-                                Leave empty if you do not wish to change the password of this user account.
+                                @lang('PANOPTICON_USERS_LBL_FIELD_PASSWORD_HELP')
                             </div>
                         @endif
                     </div>
@@ -105,6 +105,23 @@ JS;
                         >
                     </div>
                 </div>
+
+                {{-- passkey_login_no_password --}}
+                @if ($this->canDecideDisablePassword)
+                <div class="row mb-3">
+                    <div class="col-sm-9 offset-sm-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch"
+                                   name="passkey_login_no_password" value="1"
+                                   {{ $user->getParameters()->get('passkey_login_no_password', false) ? 'checked' : '' }}
+                                   id="passkey_login_no_password">
+                            <label class="form-check-label" for="passkey_login_no_password">
+                                @lang('PANOPTICON_USERS_LBL_FIELD_PASSKEY_LOGIN_NO_PASSWORD')
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                @endif
 
                 {{-- You can only edit groups when you're a Superuser --}}
                 @if ($this->container->userManager->getUser()->getPrivilege('panopticon.super'))
@@ -241,14 +258,25 @@ JS;
                 </fieldset>
 
             </div>
-
-            {{-- TODO Multi-factor Authentication Administration --}}
         </div>
         @endif
     </div>
 
+    {{-- Passkey login administration --}}
+    @if($this->passkeyVariables['enabled'] && $this->passkeyVariables['allow_add'])
+    @js('js/passkeys.min.js', $this->getContainer()->application, defer: true)
+    <div class="row g-2 {{ $this->collapseForMFA ? 'collapse' : '' }}">
+        <div class="row g-2">
+            <div class="col-12" id="passkey-management-interface">
+                @include('Users/form_passkeys', $this->passkeyVariables)
+            </div>
+        </div>
+    </div>
+    @endif
+
+    {{-- Multi-factor Authentication administration --}}
     @if ($this->canEditMFA)
-    <div class="row g-2">
+    <div class="row g-2 {{ $this->collapseForPasskey ? 'collapse' : '' }}">
         <div class="col-12">
             @include('Users/form_mfa')
         </div>
@@ -258,5 +286,7 @@ JS;
     <input type="hidden" name="id" value="{{ $model->getId() ?? 0 }}">
     <input type="hidden" name="token" value="@token()">
     <input type="hidden" name="task" id="task" value="browse">
+    <input type="hidden" name="collapseForMFA" id="collapseForMFA" value="{{ $this->collapseForMFA ? 1 : 0 }}">
+    <input type="hidden" name="collapseForPasskey" id="collapseForPasskey" value="{{ $this->collapseForPasskey ? 1 : 0 }}">
 
 </form>

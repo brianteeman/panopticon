@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -24,7 +24,7 @@ class Html extends \Awf\Mvc\DataView\Html
 		$this->extUpdatePreferences = $this->getModel()->getExtensionPreferencesAndMeta();
 
 		// Load JavaScript
-		Template::addJs('media://js/showon.js', $this->getContainer()->application);
+		Template::addJs('media://js/showon.js', $this->getContainer()->application, defer: true);
 
 		// Create a save and apply button in the toolbar
 		$this->addButton('save');
@@ -46,6 +46,41 @@ class Html extends \Awf\Mvc\DataView\Html
 		]);
 		Template::addJs('media://js/remember-tab.js', $this->getContainer()->application);
 		Template::addJs('media://js/filter-extensions.js', $this->getContainer()->application);
+		Template::addJs('media://choices/choices.min.js', $this->getContainer()->application, defer: true);
+
+		$js = <<< JS
+(() => {
+const onDOMContentLoaded = () => {
+    // Enable Choices.js
+        if (typeof Choices !== "undefined")
+        {
+            document.querySelectorAll(".js-choice")
+                    .forEach((element) =>
+                    {
+                        new Choices(
+                            element,
+                            {
+                                allowHTML:        false,
+                                placeholder:      true,
+                                placeholderValue: "",
+                                removeItemButton: true
+                            }
+                        );
+                    });
+        }
+}
+
+if (document.readyState === "loading")
+{
+    document.addEventListener("DOMContentLoaded", onDOMContentLoaded);
+}
+else
+{
+    onDOMContentLoaded();
+} 
+})();
+JS;
+		$this->getContainer()->application->getDocument()->addScriptDeclaration($js);
 
 		return true;
 	}

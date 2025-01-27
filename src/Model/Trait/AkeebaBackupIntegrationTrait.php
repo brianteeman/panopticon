@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -19,11 +19,13 @@ use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupInvalidBody;
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNoEndpoint;
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNotInstalled;
 use Akeeba\Panopticon\Library\Cache\CallbackController;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Logger\MemoryLogger;
 use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Model\Exception\AkeebaBackupCannotConnectException;
 use Akeeba\Panopticon\Model\Exception\AkeebaBackupIsNotPro;
 use Akeeba\Panopticon\Model\Exception\AkeebaBackupNoInfoException;
+use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Model\Task;
 use Awf\Mvc\DataModel\Collection;
 use Awf\User\User;
@@ -80,7 +82,17 @@ trait AkeebaBackupIntegrationTrait
 
 		$client = $container->httpFactory->makeClient(cache: false, singleton: false);
 
-		[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/panopticon/akeebabackup/info');
+		[$url, $options] = match ($this->cmsType())
+		{
+			CMSType::JOOMLA => $this->getRequestOptions($this, '/index.php/v1/panopticon/akeebabackup/info'),
+			CMSType::WORDPRESS => $this->getRequestOptions($this, '/v1/panopticon/akeebabackup/info'),
+			default => [null, null]
+		};
+
+		if ($url === null)
+		{
+			// TODO Raise exception: unsupported site
+		}
 
 		$options[RequestOptions::HTTP_ERRORS] = false;
 
@@ -123,7 +135,11 @@ trait AkeebaBackupIntegrationTrait
 
 		// Do I have updated information?
 		$config      = $this->getConfig();
-		$info        = $results?->data?->attributes ?? null;
+		$info        = match ($this->cmsType()) {
+			CMSType::JOOMLA => $results?->data?->attributes ?? null,
+			CMSType::WORDPRESS => $results ?? null,
+			default => null
+		};
 		$currentInfo = $config->get('akeebabackup.info') ?: new stdClass();
 		$dirtyFlag   = false;
 
@@ -172,7 +188,7 @@ trait AkeebaBackupIntegrationTrait
 		}
 
 		// If `installed` is not true we cannot proceed with auto-detection.
-		if ($info?->installed !== true)
+		if (($info?->installed ?? false) !== true)
 		{
 			$config->set('akeebabackup.endpoint', null);
 
@@ -192,6 +208,11 @@ trait AkeebaBackupIntegrationTrait
 			);
 			$newEndpointConfiguration = null;
 
+			if (empty($endpoints))
+			{
+				throw new AkeebaBackupIsNotPro();
+			}
+
 			foreach ($endpoints as $someEndpoint)
 			{
 				$options = new JsonApiOptions(
@@ -206,14 +227,28 @@ trait AkeebaBackupIntegrationTrait
 
 				$httpClient = new HttpClientGuzzle($options);
 				$apiClient  = new Connector($httpClient);
+				$foundConfig = false;
 
 				try
 				{
-					$apiClient->autodetect();
+					$apiClient->information();
+					$foundConfig = true;
 				}
-				catch (Throwable)
+				catch (Exception $e)
 				{
-					continue;
+					// Nothing
+				}
+
+				if (!$foundConfig)
+				{
+					try
+					{
+						$apiClient->autodetect();
+					}
+					catch (Throwable)
+					{
+						continue;
+					}
 				}
 
 				$newEndpointConfiguration = (object) $httpClient->getOptions()->toArray();
@@ -273,18 +308,53 @@ trait AkeebaBackupIntegrationTrait
 	 * @return  bool
 	 * @since   1.0.0
 	 */
-	public function hasAkeebaBackup(): bool
+	public function hasAkeebaBackup(bool $onlyProfessional = false): bool
 	{
-		$config     = $this->getConfig();
-		$extensions = (array) $config->get('extensions.list');
-		$extensions = array_filter(
-			$extensions,
-			fn(object $ext) => in_array(
-				$ext->element, ['pkg_akeebabackup', 'pkg_akeeba', 'com_akeebabackup', 'com_akeeba']
-			)
-		);
+		if ($this->cmsType() === CMSType::JOOMLA)
+		{
+			// Joomla 3 doesn't support Download Keys, so we test the package name instead.
+			if (version_compare($this->getConfig()->get('core.current.version', '4.0.0'), '3.99999.99999', 'le'))
+			{
+				return array_reduce(
+					(array) $this->getConfig()->get('extensions.list'),
+					fn(bool $carry, object $item) => $carry ||
+					                                 (
+						                                 $item->type === 'package'
+						                                 && in_array($item->element, ['pkg_akeebabackup', 'pkg_akeeba', 'com_akeebabackup', 'com_akeeba'])
+						                                 && (!$onlyProfessional || str_contains(strtolower($item->description), 'professional'))
+					                                 ),
+					false
+				);
+			}
 
-		return count($extensions) > 0;
+			// Joomla 4 and later, we just check if the package supports download keys.
+			return array_reduce(
+				(array) $this->getConfig()->get('extensions.list'),
+				fn(bool $carry, object $item) => $carry ||
+				                                 (
+					                                 $item->type === 'package'
+					                                 && in_array($item->element, ['pkg_akeebabackup', 'pkg_akeeba'])
+					                                 && (!$onlyProfessional || $item->downloadkey?->supported)
+				                                 ),
+				false
+			);
+		}
+
+		if ($this->cmsType() === CMSType::WORDPRESS)
+		{
+			return array_reduce(
+				(array) $this->getConfig()->get('extensions.list'),
+				fn(bool $carry, object $item) => $carry ||
+				                                 (
+					                                 $item->type === 'plugin'
+					                                 && $item->element === 'akeebabackupwp.php'
+					                                 && (!$onlyProfessional || str_contains(strtolower($item->name), 'professional'))
+				                                 ),
+				false
+			);
+		}
+
+		return false;
 	}
 
 	/**
@@ -621,16 +691,29 @@ trait AkeebaBackupIntegrationTrait
 
 			try
 			{
-				$mustSave = $this->testAkeebaBackupConnection();
+				$this->saveSite(
+					$this,
+					function (Site $model)
+					{
+						$dirty = $model->testAkeebaBackupConnection(true);
 
-				if ($mustSave)
-				{
-					$this->save();
+						if (!$dirty)
+						{
+							// This short-circuits saveSite(), telling it to save nothing.
+							throw new \RuntimeException('Nothing to save');
+						}
+					},
+					function (Throwable $e)
+					{
+						if (!$e instanceof \RuntimeException || $e->getMessage() !== 'Nothing to save')
+						{
+							throw $e;
+						}
+					}
+				);
 
-					$config          = $this->getConfig();
-					$info            = $config->get('akeebabackup.info');
-					$endpointOptions = $config->get('akeebabackup.endpoint');
-				}
+				$info            = $config->get('akeebabackup.info');
+				$endpointOptions = $config->get('akeebabackup.endpoint');
 			}
 			catch (GuzzleException $e)
 			{

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,8 +9,8 @@ defined('AKEEBA') || die;
 
 /** @var \Akeeba\Panopticon\View\Sites\Html $this */
 
+use Akeeba\Panopticon\Library\SoftwareVersions\JoomlaVersion;
 use Akeeba\Panopticon\Library\Enumerations\JoomlaUpdateRunState;
-use Akeeba\Panopticon\Library\JoomlaVersion\JoomlaVersion;
 use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Library\Version\Version;
 use Awf\Registry\Registry;
@@ -21,8 +21,9 @@ $overridesChanged         = $this->siteConfig->get('core.overridesChanged');
 $lastError                = trim($this->siteConfig->get('core.lastErrorMessage') ?? '');
 $hasError                 = !empty($lastError);
 $lastUpdateTimestamp      = $this->siteConfig->get('core.lastAttempt')
-	? $this->timeAgo($this->siteConfig->get('core.lastAttempt')) :
-    $this->getLanguage()->text('PANOPTICON_LBL_NEVER');
+	? $this->timeAgo($this->siteConfig->get('core.lastAttempt'))
+	:
+	$this->getLanguage()->text('PANOPTICON_LBL_NEVER');
 $jVersionHelper           = new JoomlaVersion($this->getContainer());
 $showScheduleButton       = $this->joomlaUpdateRunState->isValidUpdateState();
 $showCancelScheduleButton = false;
@@ -38,7 +39,8 @@ $isSecurity               = $versionFamilyInfo?->security ?? null;
 ?>
 
 @section('jUpdateLastErrorModal')
-	<?php $siteInfoLastErrorModalID = 'silem-' . md5(random_bytes(120)); ?>
+	<?php
+	$siteInfoLastErrorModalID = 'silem-' . hash('md5', random_bytes(120)); ?>
     <div class="btn btn-danger btn-sm px-1 py-0" aria-hidden="true"
          data-bs-toggle="modal" data-bs-target="#{{ $siteInfoLastErrorModalID }}"
     >
@@ -80,7 +82,17 @@ $isSecurity               = $versionFamilyInfo?->security ?? null;
 @stop
 
 @section('jUpdateStatus')
-    @if(!$this->siteConfig->get('core.extensionAvailable', true))
+    @if (empty($currentVersion))
+        <div class="alert alert-danger">
+            <h4 class="alert alert-heading h5 p-0">
+                <span class="fab fa-joomla d-none d-md-inline" aria-hidden="true"></span>
+                @lang('PANOPTICON_SITE_LBL_JUPDATE_NO_VERSION_HEAD')
+            </h4>
+            <p>
+                @lang('PANOPTICON_SITE_LBL_JUPDATE_NO_VERSION_BODY')
+            </p>
+        </div>
+    @elseif(!$this->siteConfig->get('core.extensionAvailable', true))
         <div class="alert alert-danger">
             <h4 class="alert-heading h6">
                 <span class="fa fa-xmark-circle" aria-hidden="true"></span>
@@ -244,15 +256,11 @@ $isSecurity               = $versionFamilyInfo?->security ?? null;
 @stop
 
 @section('jUpdateSchedule')
-    @if ($this->joomlaUpdateRunState === JoomlaUpdateRunState::NOT_SCHEDULED)
-        <p>
-            @lang('PANOPTICON_SITE_LBL_JUPDATE_NOT_SCHEDULED')
-        </p>
-    @elseif ($this->joomlaUpdateRunState === JoomlaUpdateRunState::SCHEDULED)
-        <?php
-        $showScheduleButton       = false;
-        $showCancelScheduleButton = true;
-        ?>
+    @if ($this->joomlaUpdateRunState === JoomlaUpdateRunState::SCHEDULED || $this->joomlaUpdateRunState === JoomlaUpdateRunState::REFRESH_SCHEDULED)
+			<?php
+			$showScheduleButton       = false;
+			$showCancelScheduleButton = true;
+			?>
         <p>
             @if ($joomlaUpdateTask?->next_execution)
                 @sprintf('PANOPTICON_SITE_LBL_JUPDATE_SCHEDULED', $this->formatDate($joomlaUpdateTask->next_execution, 'DATE_FORMAT_LC7'))
@@ -260,15 +268,16 @@ $isSecurity               = $versionFamilyInfo?->security ?? null;
                 @lang('PANOPTICON_SITE_LBL_JUPDATE_SCHEDULED_ASAP')
             @endif
         </p>
-    @elseif ($this->joomlaUpdateRunState === JoomlaUpdateRunState::RUNNING)
-			<?php $showScheduleButton = false; ?>
+    @elseif ($this->joomlaUpdateRunState === JoomlaUpdateRunState::RUNNING || $this->joomlaUpdateRunState === JoomlaUpdateRunState::REFRESH_RUNNING)
+			<?php
+			$showScheduleButton = false; ?>
         <p>
             @lang('PANOPTICON_SITE_LBL_JUPDATE_RUNNING')
         </p>
-    @elseif ($this->joomlaUpdateRunState === JoomlaUpdateRunState::ERROR)
+    @elseif ($this->joomlaUpdateRunState === JoomlaUpdateRunState::ERROR || $this->joomlaUpdateRunState === JoomlaUpdateRunState::REFRESH_ERROR)
         {{-- Task error condition --}}
 			<?php
-			$status = Status::tryFrom($joomlaUpdateTask->last_exit_code) ?? Status::NO_ROUTINE
+			$status = Status::tryFrom($joomlaUpdateTask->last_exit_code) ?? Status::NO_ROUTINE;
 			?>
         <p class="text-warning-emphasis">
             @lang('PANOPTICON_SITE_LBL_JUPDATE_ERRORED')
@@ -293,10 +302,14 @@ $isSecurity               = $versionFamilyInfo?->security ?? null;
 
         {{-- Button to reset the error (by removing the failed task) --}}
         <a href="@route(sprintf('index.php?view=site&task=clearUpdateScheduleError&id=%d&%s=1', $this->item->id, $token))"
-           class="btn btn-primary mt-3" role="button">
+           class="btn btn-primary" role="button">
             <span class="fa fa-eraser" aria-hidden="true"></span>
             @lang('PANOPTICON_SITE_LBL_JUPDATE_SCHEDULE_CLEAR_ERROR')
         </a>
+    @elseif($this->joomlaUpdateRunState != JoomlaUpdateRunState::CANNOT_UPGRADE)
+        <p>
+            @lang('PANOPTICON_SITE_LBL_JUPDATE_NOT_SCHEDULED')
+        </p>
     @endif
 
     @if ($showScheduleButton)

@@ -1,11 +1,13 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
 defined('AKEEBA') || die;
+
+use \Akeeba\Panopticon\Library\Enumerations\CMSType;
 
 /**
  * @var \Akeeba\Panopticon\View\Extupdates\Html $this
@@ -50,7 +52,8 @@ JS;
             {{-- Groups --}}
             @if (!empty($this->groupMap))
                 <div class="input-group choice-large">
-                    <label for="group" class="form-label visually-hidden">@lang('PANOPTICON_MAIN_LBL_FILTER_GROUPS')</label>
+                    <label for="group"
+                           class="form-label visually-hidden">@lang('PANOPTICON_MAIN_LBL_FILTER_GROUPS')</label>
                     {{ $this->container->html->select->genericList(
                         data: array_combine(
                             array_merge([''], array_keys($this->groupMap)),
@@ -98,7 +101,7 @@ JS;
                 {{ $this->container->html->select->genericList(
                     array_merge([
                         '' => $this->getLanguage()->text('PANOPTICON_COREUPDATES_LBL_SELECT_CURRENT')
-                    ], $mainModel->getKnownJoomlaVersions()),
+                    ], $mainModel->getKnownCMSVersions()),
                     'cmsFamily',
                     [
                         'class' => 'form-select akeebaGridViewAutoSubmitOnChange',
@@ -113,7 +116,7 @@ JS;
                 {{ $this->container->html->select->genericList(
                     array_merge([
                         '' => $this->getLanguage()->text('PANOPTICON_COREUPDATES_LBL_SELECT_LATEST')
-                    ], $mainModel->getKnownJoomlaVersions()),
+                    ], $mainModel->getKnownCMSVersions()),
                     'latestFamily',
                     [
                         'class' => 'form-select akeebaGridViewAutoSubmitOnChange',
@@ -167,14 +170,24 @@ JS;
         </tr>
         </thead>
         <tbody>
-        <?php $i = 0; ?>
+		<?php
+		$i = 0; ?>
         @foreach ($this->items as $item)
-            <?php
-                /** @var \Akeeba\Panopticon\Model\Site $item */
-                $isScheduled = $item->isJoomlaUpdateTaskScheduled();
-				$isStuck = $item->isJoomlaUpdateTaskScheduled();
-				$isRunning = $item->isJoomlaUpdateTaskRunning();
-            ?>
+				<?php
+				/** @var \Akeeba\Panopticon\Model\Site $item */
+                [$isScheduled, $isStuck, $isRunning] = match($item->cmsType()) {
+					CMSType::JOOMLA => [
+						$item->isJoomlaUpdateTaskScheduled(),
+                        $item->isJoomlaUpdateTaskStuck(),
+                        $item->isJoomlaUpdateTaskRunning()
+                    ],
+					CMSType::WORDPRESS => [
+						$item->isWordPressUpdateTaskScheduled(),
+                        $item->isWordPressUpdateTaskStuck(),
+                        $item->isWordPressUpdateTaskRunning()
+                    ]
+                }
+				?>
             <tr>
                 <td>
                     <label for="cb{{{ ++$i }}}" class="visually-hidden">
@@ -185,32 +198,65 @@ JS;
                            onclick="akeeba.System.isChecked(this.checked);" />
                 </td>
                 <th scope="row">
-                    @if ($item->isJoomlaUpdateTaskStuck())
-                        <div class="badge bg-light text-dark"
-                             data-bs-toggle="tooltip" data-bs-placement="bottom"
-                             data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_STUCK_UPDATE')"
-                        >
-                            <span class="fa fa-bell" aria-hidden="true"></span>
-                            <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_STUCK_UPDATE')</span>
-                        </div>
-                    @elseif ($item->isJoomlaUpdateTaskRunning())
-                        <div class="badge bg-info-subtle text-primary"
-                             data-bs-toggle="tooltip" data-bs-placement="bottom"
-                             data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_RUNNING_UPDATE')"
-                        >
-                            <span class="fa fa-play" aria-hidden="true"></span>
-                            <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_RUNNING_UPDATE')</span>
-                        </div>
-                    @elseif ($item->isJoomlaUpdateTaskScheduled())
-                        <div class="badge bg-info-subtle text-info"
-                             data-bs-toggle="tooltip" data-bs-placement="bottom"
-                             data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_SCHEDULED_UPDATE')"
-                        >
-                            <span class="fa fa-clock" aria-hidden="true"></span>
-                            <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_SCHEDULED_UPDATE')</span>
-                        </div>
+                    @if ($isStuck)
+                        @if ($item->cmsType() === CMSType::JOOMLA)
+                            <div class="badge bg-light text-dark"
+                                 data-bs-toggle="tooltip" data-bs-placement="bottom"
+                                 data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_STUCK_UPDATE')"
+                            >
+                                <span class="fa fa-bell" aria-hidden="true"></span>
+                                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_STUCK_UPDATE')</span>
+                            </div>
+                        @elseif($item->cmsType() === CMSType::WORDPRESS)
+                            <div class="badge bg-light text-dark"
+                                 data-bs-toggle="tooltip" data-bs-placement="bottom"
+                                 data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_STUCK_UPDATE_WP')"
+                            >
+                                <span class="fa fa-bell" aria-hidden="true"></span>
+                                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_STUCK_UPDATE_WP')</span>
+                            </div>
+                        @endif
+                    @elseif ($isRunning)
+                        @if ($item->cmsType() === CMSType::JOOMLA)
+                            <div class="badge bg-info-subtle text-primary"
+                                 data-bs-toggle="tooltip" data-bs-placement="bottom"
+                                 data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_RUNNING_UPDATE')"
+                            >
+                                <span class="fa fa-play" aria-hidden="true"></span>
+                                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_RUNNING_UPDATE')</span>
+                            </div>
+                        @elseif($item->cmsType() === CMSType::WORDPRESS)
+                            <div class="badge bg-info-subtle text-primary"
+                                 data-bs-toggle="tooltip" data-bs-placement="bottom"
+                                 data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_RUNNING_UPDATE_WP')"
+                            >
+                                <span class="fa fa-play" aria-hidden="true"></span>
+                                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_RUNNING_UPDATE_WP')</span>
+                            </div>
+                        @endif
+                    @elseif ($isScheduled)
+                        @if ($item->cmsType() === CMSType::JOOMLA)
+                            <div class="badge bg-info-subtle text-info"
+                                 data-bs-toggle="tooltip" data-bs-placement="bottom"
+                                 data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_SCHEDULED_UPDATE')"
+                            >
+                                <span class="fa fa-clock" aria-hidden="true"></span>
+                                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_SCHEDULED_UPDATE')</span>
+                            </div>
+                        @elseif($item->cmsType() === CMSType::WORDPRESS)
+                            <div class="badge bg-info-subtle text-info"
+                                 data-bs-toggle="tooltip" data-bs-placement="bottom"
+                                 data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_SCHEDULED_UPDATE_WP')"
+                            >
+                                <span class="fa fa-clock" aria-hidden="true"></span>
+                                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_SCHEDULED_UPDATE_WP')</span>
+                            </div>
+                        @endif
                     @endif
 
+                    <div class="d-inline-block me-1">
+                        @include('Common/sitetype', ['site' => $item])
+                    </div>
                     <a class="fw-medium"
                        href="@route(sprintf('index.php?view=site&task=read&id=%s', $item->id))">
                         {{{ $item->name }}}

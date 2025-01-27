@@ -1,13 +1,14 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
-use Akeeba\Panopticon\Library\Version\Version;
-
 defined('AKEEBA') || die;
+
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
+use Akeeba\Panopticon\Library\Version\Version;
 
 /**
  * @var \Akeeba\Panopticon\View\Extupdates\Html $this
@@ -18,7 +19,8 @@ $model     = $this->getModel();
 $mainModel = $this->getModel('main');
 $token     = $this->container->session->getCsrfToken()->getValue();
 
-$willAutoUpdate = function (string $key, ?string $oldVersion, ?string $newVersion, \Akeeba\Panopticon\Model\Site $site): bool {
+$willAutoUpdate = function (string $key, ?string $oldVersion, ?string $newVersion, \Akeeba\Panopticon\Model\Site $site
+): bool {
 	static $updateInfo, $globalUpdateInfo, $defaultPreference;
 
 	if (empty($oldVersion) || empty($newVersion) || empty($key) || version_compare($oldVersion, $newVersion, 'ge'))
@@ -82,7 +84,8 @@ JS;
             {{-- Groups --}}
             @if (!empty($this->groupMap))
                 <div class="input-group choice-large">
-                    <label for="group" class="form-label visually-hidden">@lang('PANOPTICON_MAIN_LBL_FILTER_GROUPS')</label>
+                    <label for="group"
+                           class="form-label visually-hidden">@lang('PANOPTICON_MAIN_LBL_FILTER_GROUPS')</label>
                     {{ $this->container->html->select->genericList(
                         data: array_combine(
                             array_merge([''], array_keys($this->groupMap)),
@@ -129,7 +132,7 @@ JS;
                 {{ $this->container->html->select->genericList(
                     array_merge([
                         '' => $this->getLanguage()->text('PANOPTICON_EXTUPDATES_LBL_CMSVERSION_SELECT')
-                    ], $mainModel->getKnownJoomlaVersions()),
+                    ], $mainModel->getKnownCMSVersions()),
                     'cmsFamily',
                     [
                         'class' => 'form-select akeebaGridViewAutoSubmitOnChange',
@@ -171,7 +174,8 @@ JS;
                 }}
             </div>
             <div>
-                <label class="visually-hidden" for="extension_author">@lang('PANOPTICON_EXTUPDATES_LBL_EXT_AUTHOR')</label>
+                <label class="visually-hidden"
+                       for="extension_author">@lang('PANOPTICON_EXTUPDATES_LBL_EXT_AUTHOR')</label>
                 {{  $this->container->html->select->genericList(
                         $model->getExtensionAuthors(true),
                         'extension_author',
@@ -185,7 +189,8 @@ JS;
                 }}
             </div>
             <div>
-                <label class="visually-hidden" for="extension_author_url">@lang('PANOPTICON_EXTUPDATES_LBL_EXT_AUTHOR_URL')</label>
+                <label class="visually-hidden"
+                       for="extension_author_url">@lang('PANOPTICON_EXTUPDATES_LBL_EXT_AUTHOR_URL')</label>
                 {{  $this->container->html->select->genericList(
                         $model->getExtensionAuthorURLs(true),
                         'extension_author_url',
@@ -245,6 +250,19 @@ JS;
 				$hasUpdate         = !empty($currentVersion) && !empty($latestVersion)
 				                     && ($currentVersion != $latestVersion)
 				                     && version_compare($currentVersion, $latestVersion, 'lt');
+				$isScheduled       = match($site->cmsType()) {
+					CMSType::JOOMLA => in_array($item->extension_id, $this->scheduledPerSite[$site->getId()]),
+                    CMSType::WORDPRESS => in_array(
+	                    (($item->type === 'plugin') ? 'plg_' : 'tpl_') . str_replace('/', '_', $item->extension_id),
+	                    $this->scheduledPerSite[$site->getId()]
+                    ),
+                    default => false
+                };
+				$extIdForUpdate    = match($site->cmsType()) {
+					CMSType::JOOMLA => (int) ($item->extension_id ?? 0),
+					CMSType::WORDPRESS => (($item->type === 'plugin') ? 'plg_' : 'tpl_') . str_replace('/', '_', $item->extension_id),
+                    default => '',
+				}
 				?>
             <tr>
                 <td>
@@ -252,7 +270,7 @@ JS;
                         @sprintf('PANOPTICON_EXTUPDATES_LBL_SELECT_EXTENSION', strip_tags($item->name), $site->name)
                     </label>
                     <input type="checkbox" id="cb{{{ $i }}}" name="eid[]"
-                           value="{{{ (int)$item->site_id . '_' . (int)$item->extension_id  }}}"
+                           value="{{{ (int)$item->site_id . '_' . $extIdForUpdate  }}}"
                            onclick="akeeba.System.isChecked(this.checked);" />
                 </td>
                 <td>
@@ -261,7 +279,11 @@ JS;
                         {{{ $site->name }}}
                     </a>
                     <div class="text-body-secondary">
-                        <span class="fab fa-fw fa-joomla text-info" aria-hidden="true"></span>
+                        @if ($site->cmsType() === CMSType::JOOMLA)
+                            <span class="fab fa-fw fa-joomla text-secondary" aria-hidden="true"></span>
+                        @elseif ($site->cmsType() === CMSType::WORDPRESS)
+                            <span class="fab fa-fw fa-wordpress text-info" aria-hidden="true"></span>
+                        @endif
                         {{{ $site->getConfig()->get('core.current.version')  }}}
                         &nbsp;
                         <span class="fab fa-fw fa-php text-primary" aria-hidden="true"></span>
@@ -340,7 +362,7 @@ JS;
                             <s>{{{ strip_tags($item->name) }}}</s>
                         @endif
 
-                        @if (in_array($item->extension_id, $this->scheduledPerSite[$site->getId()]))
+                        @if ($isScheduled)
                             <span class="badge bg-success">
                             <span class="fa fa-hourglass-half" aria-hidden="true"
                                   data-bs-toggle="tooltip" data-bs-placement="top"
@@ -359,7 +381,7 @@ JS;
                             <span class="visually-hidden">@lang('PANOPTICON_SITE_LBL_EXTENSIONS_WILL_NOT_AUTOUPDATE')</span>
                         @endif
                     </div>
-                    <div class="small text-muted font-monospace">{{{ ltrim($key, 'a') }}}</div>
+                    <div class="small text-muted font-monospace">{{{ str_starts_with($key, 'atpl_') || str_starts_with($key, 'amod_') ? ltrim($key, 'a') : $key }}}</div>
                     @if ($missingDownloadID)
                         <div>
                             <span class="badge bg-danger">
@@ -368,7 +390,7 @@ JS;
                             </span>
                         </div>
                         @if ($this->container->userManager->getUser()->authorise('panopticon.admin', $site->id))
-                            <a href="@route(sprintf('index.php?view=site&task=dlkey&id=%d&extension=%d&%s=1', $site->id, $extensionId, $token))"
+                            <a href="@route(sprintf('index.php?view=site&task=dlkey&id=%d&extension=%d&%s=1', $site->id, $extIdForUpdate, $token))"
                                class="ms-2 btn btn-outline-primary btn-sm" role="button">
                                 <span class="fa fa-pencil-square" aria-hidden="true"></span>
                                 <span class="visually-hidden">@lang('PANOPTICON_BTN_EDIT')</span>
@@ -407,7 +429,8 @@ JS;
                 <td class="small">
                     <div>
                         @if ($item->authorUrl)
-                            <a href="{{ (str_starts_with($item->authorUrl, 'http://') || str_starts_with($item->authorUrl, 'https://') || str_starts_with($item->authorUrl, '//')) ? '' : '//' }}{{{ $item->authorUrl }}}" target="_blank">
+                            <a href="{{ (str_starts_with($item->authorUrl, 'http://') || str_starts_with($item->authorUrl, 'https://') || str_starts_with($item->authorUrl, '//')) ? '' : '//' }}{{{ $item->authorUrl }}}"
+                               target="_blank">
                                 {{{ strip_tags($item->author) }}}
                             </a>
                         @else

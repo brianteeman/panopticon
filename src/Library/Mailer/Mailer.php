@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,12 +11,9 @@ defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Factory;
 use Akeeba\Panopticon\Model\Mailtemplates;
-use Awf\Application\Application;
 use Awf\Container\ContainerAwareInterface;
 use Awf\Container\ContainerAwareTrait;
 use Awf\Mailer\Mailer as AWFMailer;
-use Awf\Mvc\Model;
-use Awf\Text\Text;
 use Awf\Uri\Uri;
 
 class Mailer extends AWFMailer implements ContainerAwareInterface
@@ -85,6 +82,10 @@ class Mailer extends AWFMailer implements ContainerAwareInterface
 				$this->IsMail();
 				break;
 		}
+
+		$this->clearReplyTos();
+		$this->addReplyTo($config->get('mailfrom'), $config->get('fromname'));
+		$this->XMailer = 'Panopticon ' . (defined('AKEEBA_PANOPTICON_VERSION') ? constant('AKEEBA_PANOPTICON_VERSION') : 'dev');
 	}
 
 	/**
@@ -302,7 +303,7 @@ class Mailer extends AWFMailer implements ContainerAwareInterface
 		}
 
 		$replacements = array_merge([
-			'URL' => Uri::base(false, $this->getContainer()),
+			'URL' => rtrim(Uri::base(false, $this->getContainer()), '/'),
 		], $replacements);
 		$replaceFrom  = array_map(
 			fn(string $x) => '[' . strtoupper($x) . ']',

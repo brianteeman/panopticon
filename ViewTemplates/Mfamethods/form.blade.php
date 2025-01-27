@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -54,7 +54,7 @@ $userId   = $this->user->getId() ?? 0;
     </div>
 
 	@if (!empty($this->renderOptions['pre_message']))
-    <div class="mb-3">
+    <div class="row mb-3">
         {{ $this->renderOptions['pre_message'] }}
     </div>
 	@endif

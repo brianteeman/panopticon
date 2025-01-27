@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -10,6 +10,8 @@ namespace Akeeba\Panopticon;
 defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Application\Configuration;
+use Akeeba\Panopticon\Application\ContainerServices\SegmentProvider;
+use Akeeba\Panopticon\Application\ContainerServices\SessionProvider;
 use Akeeba\Panopticon\Library\Cache\CacheFactory;
 use Akeeba\Panopticon\Library\Http\HttpFactory;
 use Akeeba\Panopticon\Library\Logger\LoggerFactoryService;
@@ -35,7 +37,12 @@ class Container extends AWFContainer
 		$values['application_name']     ??= 'Panopticon';
 		$values['applicationNamespace'] ??= 'Akeeba\\Panopticon';
 		$values['basePath']             ??= APATH_ROOT;
-		$values['session_segment_name'] ??= sha1(__DIR__ . '-' . AKEEBA_PANOPTICON_VERSION . '-' . AKEEBA_PANOPTICON_DATE);
+		$values['session_segment_name'] ??= hash(
+			'sha1',
+			__DIR__ . '-' . AKEEBA_PANOPTICON_VERSION . '-' . AKEEBA_PANOPTICON_DATE
+		);
+		$values['session']              = new SessionProvider();
+		$values['segment']              = new SegmentProvider();
 
 		$values['appConfig'] ??= function (Container $c) {
 			return new Configuration($c);

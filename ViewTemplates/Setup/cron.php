@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,8 +11,18 @@ defined('AKEEBA') || die;
 
 /** @var \Akeeba\Panopticon\View\Setup\Html $this */
 
-$whatsNextClass = ($hideWhatsNext ?? false) ? 'd-none' : '';
+$whatsNextClass     = ($hideWhatsNext ?? false) ? 'd-none' : '';
+$ctaLangString      ??= 'PANOPTICON_SETUP_LBL_CRON_SUBHEAD_CTA';
+$disablePhpAccurate ??= true;
+$phpPath            = null;
 
+if (!$disablePhpAccurate)
+{
+	$tryAccurate = $this->container->appConfig->get('accurate_php_cli', 1) == 1;
+	$phpPath     = $tryAccurate ? \Akeeba\PHPFinder\PHPFinder::make()->getBestPath(PHP_VERSION) : null;
+}
+
+$displayPhpPath     = $phpPath ?? (PHP_OS_FAMILY === 'Windows' ? 'C:\\path\\to\\php.exe' : '/path/to/php');
 ?>
 
 <!-- Instructions -->
@@ -24,7 +34,7 @@ $whatsNextClass = ($hideWhatsNext ?? false) ? 'd-none' : '';
 		<?= $this->getLanguage()->text('PANOPTICON_SETUP_LBL_CRON_SUBHEAD') ?>
 	</p>
 	<p class="lead text-center fw-medium alert alert-info">
-		<?= $this->getLanguage()->text( $ctaLangString ?? 'PANOPTICON_SETUP_LBL_CRON_SUBHEAD_CTA') ?>
+		<?= $this->getLanguage()->text($ctaLangString) ?>
 	</p>
 	<p class="small text-muted text-center <?= $whatsNextClass ?>">
 		<?= $this->getLanguage()->text('PANOPTICON_SETUP_LBL_CRON_SUBHEAD_BREATHE') ?>
@@ -58,11 +68,13 @@ $whatsNextClass = ($hideWhatsNext ?? false) ? 'd-none' : '';
 						<?= $this->getLanguage()->text('PANOPTICON_SETUP_LBL_CRON_CLI_CREATE_A_JOB') ?>
 					</p>
 					<p>
-						<code><i>/path/to/php</i> <?= APATH_ROOT ?>/cli/panopticon.php task:run --loop >/dev/null 2>&1</code>
+						<code><i><?= $displayPhpPath ?></i> <?= APATH_ROOT ?>/cli/panopticon.php task:run --loop >/dev/null 2>&1</code>
 					</p>
+					<?php if ($phpPath === null): ?>
 					<p>
 						<?= $this->getLanguage()->sprintf('PANOPTICON_SETUP_LBL_CRON_REPLACE_PHP_CLI', PHP_VERSION) ?>
 					</p>
+					<?php endif ?>
 					<p class="small text-muted">
 						<?= $this->getLanguage()->text('PANOPTICON_SETUP_LBL_CRON_IF_UNSURE') ?>
 					</p>

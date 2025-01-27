@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -13,18 +13,36 @@ use Akeeba\Panopticon\Application\BootstrapUtilities;
 use Akeeba\Panopticon\Controller\Trait\ACLTrait;
 use Awf\Mvc\Controller;
 use Awf\Uri\Uri;
+use Awf\Utils\ArrayHelper;
 
 class Sysconfig extends Controller
 {
 	use ACLTrait;
 
 	private const CHECKBOX_KEYS = [
-		'debug', 'behind_load_balancer', 'stats_collection', 'proxy_enabled', 'phpwarnings', 'log_rotate_compress', 'dbencryption', 'dbsslverifyservercert', 'dbbackup_auto', 'dbbackup_compress', 'mail_online', 'mail_inline_images', 'smtpauth'
+		'debug', 'behind_load_balancer', 'stats_collection', 'proxy_enabled', 'phpwarnings', 'log_rotate_compress',
+		'dbencryption', 'dbsslverifyservercert', 'dbbackup_auto', 'dbbackup_compress', 'mail_online',
+		'mail_inline_images', 'smtpauth',  'login_failure_enable', 'login_lockout_extend', 'avatars', 'password_hibp',
+		'session_encrypt', 'session_use_default_path', 'mfa_superuser', 'mfa_admin', 'passkey_login',
+		'passkey_login_no_mfa', 'passkey_login_force_superuser', 'passkey_login_force_admin',
+		'pwreset', 'pwreset_mfa', 'pwreset_passkeys', 'pwreset_superuser', 'pwreset_admin',
 	];
 
 	public function execute($task)
 	{
 		$this->aclCheck($task);
+
+		// Special case: I am containerised, and PANOPTICON_USING_ENV is 1
+		if (defined('APATH_IN_DOCKER') && constant('APATH_IN_DOCKER') && ($_ENV['PANOPTICON_USING_ENV'] ?? 0))
+		{
+			$this->setRedirect(
+				$this->getContainer()->router->route('index.php'),
+				$this->getLanguage()->text('PANOPTICON_SYSCONFIG_ERR_USING_DOTENV'),
+				'error'
+			);
+
+			return true;
+		}
 
 		if (BootstrapUtilities::hasConfiguration(true))
 		{
@@ -113,6 +131,11 @@ class Sysconfig extends Controller
 
 		$config->set('fs', null);
 
+		// Handle the fields with lists of user groups
+		$this->handleGroupsListField('mfa_force_groups');
+		$this->handleGroupsListField('passkey_login_force_groups');
+		$this->handleGroupsListField('pwreset_groups');
+
 		// Save the appConfig to disk
 		$this->container->appConfig->saveConfiguration();
 
@@ -147,5 +170,16 @@ class Sysconfig extends Controller
 		$url = $this->container->router->route('index.php?view=main');
 
 		$this->setRedirect($url);
+	}
+
+	private function handleGroupsListField(string $configKey): void
+	{
+		$groups = $this->input->get($configKey, [], 'array') ?: [];
+		$groups = is_string($groups)
+			? array_filter(ArrayHelper::toInteger(explode(',', $groups)))
+			: $groups;
+		$groups = is_array($groups) ? $groups : [$groups];
+
+		$this->container->appConfig->set($configKey, $groups);
 	}
 }

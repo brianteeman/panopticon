@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,6 +11,7 @@ use Akeeba\Panopticon\Model\Reports;
 use Akeeba\Panopticon\Model\Site;
 use Awf\Uri\Uri;
 use Exception;
+use Symfony\Component\Cache\Adapter\FilesystemAdapter;
 use Symfony\Contracts\Cache\CacheInterface;
 use Throwable;
 
@@ -29,9 +30,19 @@ trait AkeebaBackupIntegrationTrait
 			return false;
 		}
 
-		if (!$this->akeebaBackupRelinkInternal($id))
+		try
 		{
-			return false;
+			if (!$this->akeebaBackupRelinkInternal($id))
+			{
+				return false;
+			}
+		}
+		catch (Throwable $e)
+		{
+			$this->setRedirectWithMessage(
+				$this->container->router->route(sprintf('index.php?view=site&task=read&id=%d&akeebaBackupForce=1', $id)),
+				$e->getMessage()
+			);
 		}
 
 		$this->setRedirectWithMessage(
@@ -331,16 +342,40 @@ trait AkeebaBackupIntegrationTrait
 				return false;
 			}
 
-			$dirty = $model->testAkeebaBackupConnection(true);
+			$this->saveSite(
+				$model,
+				function (Site $model)
+				{
+					$dirty = $model->testAkeebaBackupConnection(true);
 
-			if ($dirty)
-			{
-				$model->save();
-			}
-		}
-		catch (Throwable)
-		{
-			return false;
+					$container = $this->getContainer();
+					/** @var FilesystemAdapter $pool */
+					$pool      = $container->cacheFactory->pool('akeebabackup');
+
+					for ($from = 0; $from < 1000; $from += 10)
+					{
+						foreach ([0, 1, 5, 10, 15, 20, 50, 100, 200, 300, 400, 500] as $limit)
+						{
+							$pool->delete(sprintf('backupList-%d-%d-%d', $model->id, $from, $limit));
+						}
+					}
+
+					$pool->delete(sprintf('profilesList-%d', $model->id));
+
+					if (!$dirty)
+					{
+						// This short-circuits saveSite(), telling it to save nothing.
+						throw new \RuntimeException('Nothing to save');
+					}
+				},
+				function (Throwable $e)
+				{
+					if (!$e instanceof \RuntimeException || $e->getMessage() !== 'Nothing to save')
+					{
+						throw $e;
+					}
+				}
+			);
 		}
 		finally
 		{

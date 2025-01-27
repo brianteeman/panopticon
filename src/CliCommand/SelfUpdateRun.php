@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -14,7 +14,6 @@ use Akeeba\Panopticon\CliCommand\Trait\ConsoleLoggerTrait;
 use Akeeba\Panopticon\Factory;
 use Akeeba\Panopticon\Library\Task\TasksPausedTrait;
 use Akeeba\Panopticon\Model\Selfupdate;
-use Awf\Mvc\Model;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -63,6 +62,17 @@ class SelfUpdateRun extends AbstractCommand
 			return Command::SUCCESS;
 		}
 
+		if (defined('APATH_IN_DOCKER') && APATH_IN_DOCKER)
+		{
+			$this->ioStyle->error([
+				'You are running Panopticon inside Docker.',
+				'You must NOT use Panopticon\'s self-update for this configuration. Please read',
+				'https://github.com/akeeba/panopticon/wiki/Using-Docker#updates'
+			]);
+
+			return Command::FAILURE;
+		}
+
 		$this->ioStyle->info(sprintf('Downloading version %s', $newVersion));
 
 		$tempFile = $model->download();
@@ -83,6 +93,8 @@ class SelfUpdateRun extends AbstractCommand
 			$this->ioStyle->info('Extracting the update');
 
 			$model->extract($tempFile);
+			$model->invalidatePHPFiles($tempFile);
+			$model->clearCompiledTemplates();
 
 			$this->ioStyle->info('Finalising the update');
 

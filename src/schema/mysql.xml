@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   ~ @package   panopticon
-  ~ @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+  ~ @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
   ~ @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
   -->
 <schema>
@@ -184,6 +184,23 @@ CREATE TABLE IF NOT EXISTS `#__mfa`
             ]]></query>
         </action>
 
+        <action table="#__passkeys" canfail="0">
+            <condition type="missing" value=""/>
+            <query><![CDATA[
+CREATE TABLE IF NOT EXISTS `#__passkeys`
+(
+    `id`         VARCHAR(1000)   NOT NULL COMMENT 'Credential ID',
+    `user_id`    VARCHAR(128)    NOT NULL COMMENT 'User handle',
+    `label`      VARCHAR(255)    NOT NULL COMMENT 'Human readable label',
+    `credential` MEDIUMTEXT      NOT NULL COMMENT 'Attested credential data, JSON format',
+    PRIMARY KEY (`id`(100)),
+    INDEX (`user_id`(100))
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  DEFAULT COLLATE = utf8mb4_unicode_ci;
+            ]]></query>
+        </action>
+
         <action table="#__groups" canfail="0">
             <condition type="missing" value=""/>
             <query><![CDATA[
@@ -191,7 +208,7 @@ CREATE TABLE IF NOT EXISTS `#__groups`
 (
     `id`         SERIAL,
     `title`      VARCHAR(255) NOT NULL,
-    `privileges` JSON         NOT NULL DEFAULT ('{}')
+    `privileges` JSON
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   DEFAULT COLLATE = utf8mb4_unicode_ci;
@@ -206,8 +223,8 @@ CREATE TABLE IF NOT EXISTS `#__reports` (
     `site_id` BIGINT UNSIGNED NOT NULL,
     `created_on` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `created_by` BIGINT UNSIGNED NOT NULL DEFAULT '0',
-    `action` ENUM('core_update_found','core_update_installed','ext_update_found','ext_update_installed','backup','filescanner','site_action','misc_action') NOT NULL DEFAULT 'misc_action',
-    `context` JSON NOT NULL,
+    `action` ENUM('core_update_found','core_update_installed','ext_update_found','ext_update_installed','backup','filescanner','site_action','misc_action','site_up','site_down') NOT NULL DEFAULT 'misc_action',
+    `context` JSON,
     UNIQUE KEY `id` (`id`),
     KEY `#__report_site_acton_index` (`site_id`,`action`),
     KEY `#__report_site_index` (`site_id`),
@@ -215,6 +232,46 @@ CREATE TABLE IF NOT EXISTS `#__reports` (
 ) ENGINE=InnoDB
   DEFAULT CHARSET=utf8mb4
   COLLATE=utf8mb4_unicode_ci;
+            ]]></query>
+        </action>
+
+        <!-- Update the #__reports table -->
+        <action table="#__reports" canfail="1">
+            <condition type="equals" value="0"><![CDATA[
+SELECT COUNT(*) FROM `INFORMATION_SCHEMA`.`COLUMNS`
+WHERE (`COLUMN_NAME` = 'action') AND (`TABLE_NAME` = '#__reports') AND (`TABLE_SCHEMA` = DATABASE())
+  AND `COLUMN_TYPE` LIKE '%\'site_up\'%'
+            ]]></condition>
+            <query><![CDATA[
+ALTER TABLE `#__reports` CHANGE `action` `action` ENUM('core_update_found','core_update_installed','ext_update_found','ext_update_installed','backup','filescanner','site_action','misc_action','site_up','site_down') NOT NULL DEFAULT 'misc_action';
+            ]]></query>
+        </action>
+
+        <action table="#__login_failures" canfail="0">
+            <condition type="missing" value=""/>
+            <query><![CDATA[
+CREATE TABLE IF NOT EXISTS `#__login_failures`
+(
+    `ip`      VARBINARY(16),
+    `mark`    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    INDEX `#__login_failures_covering` (`ip`, `mark`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  DEFAULT COLLATE = utf8mb4_unicode_ci;
+            ]]></query>
+        </action>
+
+        <action table="#__login_lockouts" canfail="0">
+            <condition type="missing" value=""/>
+            <query><![CDATA[
+CREATE TABLE IF NOT EXISTS `#__login_lockouts`
+(
+    `ip`      VARBINARY(16),
+    `until`   DATETIME NOT NULL,
+    PRIMARY KEY `#__login_lockouts_pk` (`ip`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  DEFAULT COLLATE = utf8mb4_unicode_ci;
             ]]></query>
         </action>
 
@@ -236,7 +293,7 @@ SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` 
             <query><![CDATA[
 INSERT INTO `#__mailtemplates`
 (`type`,`language`,`subject`,`html`,`plaintext`) VALUES
-('joomlaupdate_found','*','⚠️ Joomla!™ [NEW_VERSION] is available on “[SITE_NAME]”','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw.svg\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>Joomla!&trade; [NEW_VERSION] is available on &ldquo;[SITE_NAME]&rdquo;</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Joomla! version [NEW_VERSION] is now available for installation on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. Your site is currently running the older version [OLD_VERSION].</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>The new version will <strong>NOT</strong> be installed automatically. You will have to install it yourself.</p>\r\n</div>\r\n<p class=\"akemail-announcement-note\"><em>Note</em>: Akeeba Panopticon can be configured to install new Joomla! versions automatically.</p>\r\n<p class=\"akemail-announcement-visitlink\">You can install the new Joomla! version either from your site\'s administrator page, or through the main control panel of <a href=\"[URL]\">your Akeeba Panopticon installation</a>.</p>\r\n</div>\r\n<!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nJoomla!™ [NEW_VERSION] is available on “[SITE_NAME]”\r\n\r\n\r\nJoomla! version [NEW_VERSION] is now available for installation on\r\nyour site “[SITE_NAME] [/[SITE_URL]]”. Your site is currently\r\nrunning the older version [OLD_VERSION].\r\n\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nThe new version will NOT be installed automatically. You will have to\r\ninstall it yourself.\r\n\r\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n\r\nNote: Akeeba Panopticon can be configured to install new Joomla!\r\nversions automatically.\r\n\r\n==============================================================================\r\n\r\n\r\nYou can install the new Joomla! version either from your site\'s\r\nadministrator page, or through the main control panel of your Akeeba\r\nPanopticon installation ([URL]).\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
+('joomlaupdate_found','*','⚠️ Joomla!™ [NEW_VERSION] is available on “[SITE_NAME]”','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>Joomla!&trade; [NEW_VERSION] is available on &ldquo;[SITE_NAME]&rdquo;</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Joomla! version [NEW_VERSION] is now available for installation on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. Your site is currently running the older version [OLD_VERSION].</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>The new version will <strong>NOT</strong> be installed automatically. You will have to install it yourself.</p>\r\n</div>\r\n<p class=\"akemail-announcement-note\"><em>Note</em>: Akeeba Panopticon can be configured to install new Joomla! versions automatically.</p>\r\n<p class=\"akemail-announcement-visitlink\">You can install the new Joomla! version either from your site\'s administrator page, or through the main control panel of <a href=\"[URL]\">your Akeeba Panopticon installation</a>.</p>\r\n</div>\r\n<!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nJoomla!™ [NEW_VERSION] is available on “[SITE_NAME]”\r\n\r\n\r\nJoomla! version [NEW_VERSION] is now available for installation on\r\nyour site “[SITE_NAME] [/[SITE_URL]]”. Your site is currently\r\nrunning the older version [OLD_VERSION].\r\n\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nThe new version will NOT be installed automatically. You will have to\r\ninstall it yourself.\r\n\r\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n\r\nNote: Akeeba Panopticon can be configured to install new Joomla!\r\nversions automatically.\r\n\r\n==============================================================================\r\n\r\n\r\nYou can install the new Joomla! version either from your site\'s\r\nadministrator page, or through the main control panel of your Akeeba\r\nPanopticon installation ([URL]).\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
 ]]></query>
         </action>
 
@@ -248,7 +305,7 @@ SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` 
             <query><![CDATA[
 INSERT INTO `#__mailtemplates`
 (`type`,`language`,`subject`,`html`,`plaintext`) VALUES
-('joomlaupdate_installed','*','Joomla!™ has been updated to [NEW_VERSION] on “[SITE_NAME]”','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw.svg\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>Joomla!&trade; has been updated to [NEW_VERSION] on &ldquo;[SITE_NAME]&rdquo;</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Joomla! version [NEW_VERSION] was installed on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. Before this change, your site was running the older version [OLD_VERSION].</p>\r\n<p>No further action is required on your part.</p>\r\n</div>\r\n<!-- Area Offer/Announcement --><!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nJoomla!™ has been updated to [NEW_VERSION] on “[SITE_NAME]”\r\n\r\nJoomla! version [NEW_VERSION] was installed on your site “[SITE_NAME]”. Before\r\nthis change, your site was running the older version [OLD_VERSION].\r\n\r\nNo further action is required on your part.\r\n\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
+('joomlaupdate_installed','*','Joomla!™ has been updated to [NEW_VERSION] on “[SITE_NAME]”','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>Joomla!&trade; has been updated to [NEW_VERSION] on &ldquo;[SITE_NAME]&rdquo;</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Joomla! version [NEW_VERSION] was installed on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. Before this change, your site was running the older version [OLD_VERSION].</p>\r\n<p>No further action is required on your part.</p>\r\n</div>\r\n<!-- Area Offer/Announcement --><!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nJoomla!™ has been updated to [NEW_VERSION] on “[SITE_NAME]”\r\n\r\nJoomla! version [NEW_VERSION] was installed on your site “[SITE_NAME]”. Before\r\nthis change, your site was running the older version [OLD_VERSION].\r\n\r\nNo further action is required on your part.\r\n\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
 ]]></query>
         </action>
 
@@ -260,7 +317,7 @@ SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` 
             <query><![CDATA[
 INSERT INTO `#__mailtemplates`
 (`type`,`language`,`subject`,`html`,`plaintext`) VALUES
-('joomlaupdate_failed','*','🚨 Unable to upgrade “[SITE_NAME]” to Joomla!™ [NEW_VERSION]','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw.svg\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>Unable to upgrade &ldquo;[SITE_NAME]&rdquo; to Joomla!&trade; [NEW_VERSION]</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Panopticon was unable to install the new Joomla! version [NEW_VERSION] on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. The error received is as follows:</p>\r\n<p>[MESSAGE]</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>The new version will <strong>NOT</strong> be installed automatically. You will have to install it yourself.</p>\r\n</div>\r\n<p class=\"akemail-announcement-visitlink\">You can install the new Joomla! version either from your site\'s administrator page, or through the main control panel of <a href=\"[URL]\">your Akeeba Panopticon installation</a>.</p>\r\n</div>\r\n<!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nUnable to upgrade “[SITE_NAME]” to Joomla!™ [NEW_VERSION]\r\n\r\n\r\nPanopticon was unable to install the new Joomla! version [NEW_VERSION] on \r\nyour site “[SITE_NAME]”. The error received is as follows:\r\n\r\n\r\n[MESSAGE]\r\n\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nThe new version will NOT be installed automatically. You will have to\r\ninstall it yourself.\r\n\r\n==============================================================================\r\n\r\n\r\nYou can install the new Joomla! version either from your site\'s\r\nadministrator page, or through the main control panel of your Akeeba\r\nPanopticon installation ([URL]).\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
+('joomlaupdate_failed','*','🚨 Unable to upgrade “[SITE_NAME]” to Joomla!™ [NEW_VERSION]','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>Unable to upgrade &ldquo;[SITE_NAME]&rdquo; to Joomla!&trade; [NEW_VERSION]</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Panopticon was unable to install the new Joomla! version [NEW_VERSION] on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. The error received is as follows:</p>\r\n<p>[MESSAGE]</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>The new version will <strong>NOT</strong> be installed automatically. You will have to install it yourself.</p>\r\n</div>\r\n<p class=\"akemail-announcement-visitlink\">You can install the new Joomla! version either from your site\'s administrator page, or through the main control panel of <a href=\"[URL]\">your Akeeba Panopticon installation</a>.</p>\r\n</div>\r\n<!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nUnable to upgrade “[SITE_NAME]” to Joomla!™ [NEW_VERSION]\r\n\r\n\r\nPanopticon was unable to install the new Joomla! version [NEW_VERSION] on \r\nyour site “[SITE_NAME]”. The error received is as follows:\r\n\r\n\r\n[MESSAGE]\r\n\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nThe new version will NOT be installed automatically. You will have to\r\ninstall it yourself.\r\n\r\n==============================================================================\r\n\r\n\r\nYou can install the new Joomla! version either from your site\'s\r\nadministrator page, or through the main control panel of your Akeeba\r\nPanopticon installation ([URL]).\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
 ]]></query>
         </action>
 
@@ -431,7 +488,7 @@ SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` 
             <query><![CDATA[
 INSERT INTO `#__mailtemplates` (`type`, `language`, `subject`, `html`, `plaintext`)
 VALUES
-	('scheduled_update_summary', '*', 'Updates summary for [SITE_NAME]', '<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw.svg\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n[RENDERED_HTML] <!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>', 'Hello,\r\n\r\n\r\n[RENDERED_TEXT]\r\n\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL]\r\nThis is an automated email. Please do not reply to it.');
+	('scheduled_update_summary', '*', 'Updates summary for [SITE_NAME]', '<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n[RENDERED_HTML] <!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>', 'Hello,\r\n\r\n\r\n[RENDERED_TEXT]\r\n\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL]\r\nThis is an automated email. Please do not reply to it.');
 ]]></query>
         </action>
 
@@ -443,7 +500,326 @@ SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` 
             <query><![CDATA[
 INSERT INTO `#__mailtemplates` (`type`, `language`, `subject`, `html`, `plaintext`)
 VALUES
-	('ssl_tls_expiring', '*', '⚠️ The SSL/TLS certificate for [SITE_NAME] expires soon', '<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw.svg\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>The SSL/TLS certificate for &ldquo;[SITE_NAME]&rdquo; expires soon</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>The SSL/TLS (HTTPS) certificate for your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo; will expire soon, on [DATE]. Please install a new certificate to prevent connectivity problems to your site.</p>\r\n<p><strong>ℹ️ Kind reminder</strong>: If you let your certificate expire, web browsers will report your site as &ldquo;untrusted&rdquo;. Some browsers may prevent your site\'s visitors from accessing your site completely.</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>You need to install a new SSL/TLS certificate on your site.</p>\r\n</div>\r\n<p class=\"akemail-announcement-note\"><em>Note</em>: Akeeba Panopticon cannot install or update SSL/TLS certificates. This is something you need to do from your hosting control panel.</p>\r\n</div>\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>', 'Hello,\r\n\r\n\r\nThe SSL/TLS certificate for “[SITE_NAME]” expires soon\r\n\r\n\r\nThe SSL/TLS (HTTPS) certificate for your site “[SITE_NAME]”\r\nat [SITE_URL]” will expire soon, on [DATE]. Please install a new\r\ncertificate to prevent connectivity problems to your site.\r\n\r\nℹ️ KIND REMINDER: If you let your certificate expire, web browsers\r\nwill report your site as “untrusted”. Some browsers may prevent\r\nyour site\'s visitors from accessing your site completely.\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nYou need to install a new SSL/TLS certificate on your site.\r\n\r\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n\r\n_Note_: Akeeba Panopticon cannot install or update SSL/TLS\r\ncertificates. This is something you need to do from your hosting\r\ncontrol panel.\r\n\r\n==============================================================================\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL]\r\nThis is an automated email. Please do not reply to it.');
+	('ssl_tls_expiring', '*', '⚠️ The SSL/TLS certificate for [SITE_NAME] expires soon', '<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>The SSL/TLS certificate for &ldquo;[SITE_NAME]&rdquo; expires soon</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>The SSL/TLS (HTTPS) certificate for your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo; will expire soon, on [DATE]. Please install a new certificate to prevent connectivity problems to your site.</p>\r\n<p><strong>ℹ️ Kind reminder</strong>: If you let your certificate expire, web browsers will report your site as &ldquo;untrusted&rdquo;. Some browsers may prevent your site\'s visitors from accessing your site completely.</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>You need to install a new SSL/TLS certificate on your site.</p>\r\n</div>\r\n<p class=\"akemail-announcement-note\"><em>Note</em>: Akeeba Panopticon cannot install or update SSL/TLS certificates. This is something you need to do from your hosting control panel.</p>\r\n</div>\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>', 'Hello,\r\n\r\n\r\nThe SSL/TLS certificate for “[SITE_NAME]” expires soon\r\n\r\n\r\nThe SSL/TLS (HTTPS) certificate for your site “[SITE_NAME]”\r\nat [SITE_URL]” will expire soon, on [DATE]. Please install a new\r\ncertificate to prevent connectivity problems to your site.\r\n\r\nℹ️ KIND REMINDER: If you let your certificate expire, web browsers\r\nwill report your site as “untrusted”. Some browsers may prevent\r\nyour site\'s visitors from accessing your site completely.\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nYou need to install a new SSL/TLS certificate on your site.\r\n\r\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n\r\n_Note_: Akeeba Panopticon cannot install or update SSL/TLS\r\ncertificates. This is something you need to do from your hosting\r\ncontrol panel.\r\n\r\n==============================================================================\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL]\r\nThis is an automated email. Please do not reply to it.');
+]]></query>
+        </action>
+
+        <!-- Install mail template: site_down -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'site_down') x
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates` (`type`, `language`, `subject`, `html`, `plaintext`)
+VALUES
+	('site_down','*','😱 [SITE_NAME] is down','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>The site &ldquo;[SITE_NAME]&rdquo; is down</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Panopticon has detected that your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo; appears to be inaccessible (site down). Please check whether there is a problem on your site, or your hosting provider.</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>You need to check why your site is inaccessible.</p>\r\n</div>\r\n</div>\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nThe site “[SITE_NAME]” is down\r\n\r\n\r\nPanopticon has detected that your site “[SITE_NAME]”\r\n([SITE_URL]) appears\r\nto be inaccessible (site down). Please check whether there is a problem on\r\nyour site, or your hosting provider.\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nYou need to check why your site is inaccessible.\r\n\r\n==============================================================================\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL]\r\nThis is an automated email. Please do not reply to it.');
+]]></query>
+        </action>
+
+        <!-- Install mail template: site_up -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'site_up') x
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates` (`type`, `language`, `subject`, `html`, `plaintext`)
+VALUES
+('site_up','*','🥳 [SITE_NAME] is back up','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>The site &ldquo;[SITE_NAME]&rdquo; is back up</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Panopticon has detected that your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo; appears to be accessible once again (the site is up).</p>\r\n<p>We would like to remind you that the site was inaccessible since [DOWNTIME_START] for [DOWNTIME_HUMAN].</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nThe site “[SITE_NAME]” is down\r\n\r\n\r\nPanopticon has detected that your site “[SITE_NAME]”\r\n([SITE_URL]) appears to be accessible once again\r\n(the site is up).\r\n\r\nWe would like to remind you that the site was inaccessible since\r\n[DOWNTIME_START] for [DOWNTIME_HUMAN].\r\n\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL]\r\nThis is an automated email. Please do not reply to it.');
+]]></query>
+        </action>
+
+        <!-- Install mail template: action_summary -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'action_summary') x
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates` (`type`, `language`, `subject`, `html`, `plaintext`)
+VALUES
+('action_summary', '*', 'Site action summary for [SITE_NAME]', '<div class="akemail-outer-wrapper">\n<table>\n<tbody>\n<tr>\n<td width="10%">&nbsp;</td>\n<td>\n<div class="akemail-wrapper">\n<div class="akemail-container"><!-- Logo Header -->\n<div class="akemail-logo"><a href="[URL]">&nbsp;<img src="[URL]/media/images/logo_bw.svg" alt="Panopticon &mdash; Site Monitoring">&nbsp;</a></div>\n<!-- Hello -->\n<div class="akemail-hello">\n<p>Hello,</p>\n</div>\n[RENDERED_HTML] <!-- Bye, Bye -->\n<div class="akemail-outro">\n<p>Have a great day!</p>\n</div>\n<!-- Footer -->\n<div class="akemail-footer">\n<p class="akemail-footer-sitelink">&nbsp;<a href="[URL]">Panopticon &mdash; Site Monitoring</a></p>\n</div>\n</div>\n<!-- Legal info -->\n<div class="akemail-legalinfo">\n<p>This is an automated email. Please do not reply to it.</p>\n</div>\n</div>\n</td>\n<td width="10%">&nbsp;</td>\n</tr>\n</tbody>\n</table>\n</div>', 'Hello,\n\n\n[RENDERED_TEXT]\n\n\nHave a great day!\n\n------------------------------------------------------------------------------\n\nThis email was sent by the Panopticon installation on [URL]\nThis is an automated email. Please do not reply to it.');
+]]></query>
+        </action>
+
+
+        <!-- Install mail template: wordpressupdate_found -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'wordpressupdate_found') x;
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates`
+(`type`,`language`,`subject`,`html`,`plaintext`) VALUES
+    ('wordpressupdate_found','*','⚠️ WordPress [NEW_VERSION] is available on “[SITE_NAME]”','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>WordPress [NEW_VERSION] is available on &ldquo;[SITE_NAME]&rdquo;</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>WordPress version [NEW_VERSION] is now available for installation on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. Your site is currently running the older version [OLD_VERSION].</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>The new version will <strong>NOT</strong> be installed automatically. You will have to install it yourself.</p>\r\n</div>\r\n<p class=\"akemail-announcement-note\"><em>Note</em>: Akeeba Panopticon can be configured to install new WordPress versions automatically.</p>\r\n<p class=\"akemail-announcement-visitlink\">You can install the new WordPress version either from your site\'s administrator page, or through the main control panel of <a href=\"[URL]\">your Akeeba Panopticon installation</a>.</p>\r\n</div>\r\n<!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nWordPress [NEW_VERSION] is available on “[SITE_NAME]”\r\n\r\n\r\nWordPress version [NEW_VERSION] is now available for installation on\r\nyour site “[SITE_NAME] [/[SITE_URL]]”. Your site is currently\r\nrunning the older version [OLD_VERSION].\r\n\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nThe new version will NOT be installed automatically. You will have to\r\ninstall it yourself.\r\n\r\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n\r\nNote: Akeeba Panopticon can be configured to install new WordPress\r\nversions automatically.\r\n\r\n==============================================================================\r\n\r\n\r\nYou can install the new WordPress version either from your site\'s\r\nadministrator page, or through the main control panel of your Akeeba\r\nPanopticon installation ([URL]).\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
+]]></query>
+        </action>
+
+        <!-- Install mail template: wordpressupdate_installed -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'wordpressupdate_installed') x
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates`
+(`type`,`language`,`subject`,`html`,`plaintext`) VALUES
+    ('wordpressupdate_installed','*','WordPress has been updated to [NEW_VERSION] on “[SITE_NAME]”','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>WordPress has been updated to [NEW_VERSION] on &ldquo;[SITE_NAME]&rdquo;</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>WordPress version [NEW_VERSION] was installed on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. Before this change, your site was running the older version [OLD_VERSION].</p>\r\n<p>No further action is required on your part.</p>\r\n</div>\r\n<!-- Area Offer/Announcement --><!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nWordPress has been updated to [NEW_VERSION] on “[SITE_NAME]”\r\n\r\nWordPress version [NEW_VERSION] was installed on your site “[SITE_NAME]”. Before\r\nthis change, your site was running the older version [OLD_VERSION].\r\n\r\nNo further action is required on your part.\r\n\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
+]]></query>
+        </action>
+
+        <!-- Install mail template: wordpressupdate_failed -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'wordpressupdate_failed') x
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates`
+(`type`,`language`,`subject`,`html`,`plaintext`) VALUES
+    ('wordpressupdate_failed','*','🚨 Unable to upgrade “[SITE_NAME]” to WordPress [NEW_VERSION]','<div class=\"akemail-outer-wrapper\">\r\n<table>\r\n<tbody>\r\n<tr>\r\n<td width=\"10%\">&nbsp;</td>\r\n<td>\r\n<div class=\"akemail-wrapper\">\r\n<div class=\"akemail-container\"><!-- Logo Header -->\r\n<div class=\"akemail-logo\"><a href=\"[URL]\">&nbsp;<img src=\"[URL]/media/images/logo_bw_64.png\" alt=\"Panopticon &mdash; Site Monitoring\">&nbsp;</a></div>\r\n<!-- Hello -->\r\n<div class=\"akemail-hello\">\r\n<p>Hello,</p>\r\n</div>\r\n<!-- Main-Topic -->\r\n<div class=\"akemail-main-topic\">\r\n<p>Unable to upgrade &ldquo;[SITE_NAME]&rdquo; to WordPress [NEW_VERSION]</p>\r\n</div>\r\n<!-- Message -->\r\n<div class=\"akemail-message\">\r\n<p>Panopticon was unable to install the new WordPress version [NEW_VERSION] on your site &ldquo;<a href=\"[SITE_URL]\">[SITE_NAME]</a>&rdquo;. The error received is as follows:</p>\r\n<p>[MESSAGE]</p>\r\n</div>\r\n<!-- Area Offer/Announcement -->\r\n<div class=\"akemail-announcement\">\r\n<div class=\"akemail-announcement-box\">\r\n<h3>Action required</h3>\r\n<p>The new version will <strong>NOT</strong> be installed automatically. You will have to install it yourself.</p>\r\n</div>\r\n<p class=\"akemail-announcement-visitlink\">You can install the new WordPress version either from your site\'s administrator page, or through the main control panel of <a href=\"[URL]\">your Akeeba Panopticon installation</a>.</p>\r\n</div>\r\n<!-- Bye, Bye -->\r\n<div class=\"akemail-outro\">\r\n<p>Have a great day!</p>\r\n</div>\r\n<!-- Footer -->\r\n<div class=\"akemail-footer\">\r\n<p class=\"akemail-footer-sitelink\">&nbsp;<a href=\"[URL]\">Panopticon &mdash; Site Monitoring</a></p>\r\n</div>\r\n</div>\r\n<!-- Legal info -->\r\n<div class=\"akemail-legalinfo\">\r\n<p>This is an automated email. Please do not reply to it.</p>\r\n</div>\r\n</div>\r\n</td>\r\n<td width=\"10%\">&nbsp;</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>','Hello,\r\n\r\n\r\nUnable to upgrade “[SITE_NAME]” to WordPress [NEW_VERSION]\r\n\r\n\r\nPanopticon was unable to install the new WordPress version [NEW_VERSION] on \r\nyour site “[SITE_NAME]”. The error received is as follows:\r\n\r\n\r\n[MESSAGE]\r\n\r\n\r\n==============================================================================\r\n! ! ! ! !  ACTION REQUIRED  ! ! ! ! !\r\n==============================================================================\r\n\r\nThe new version will NOT be installed automatically. You will have to\r\ninstall it yourself.\r\n\r\n==============================================================================\r\n\r\n\r\nYou can install the new WordPress version either from your site\'s\r\nadministrator page, or through the main control panel of your Akeeba\r\nPanopticon installation ([URL]).\r\n\r\nHave a great day!\r\n\r\n------------------------------------------------------------------------------\r\n\r\nThis email was sent by the Panopticon installation on [URL].\r\nThis is an automated email. Please do not reply to it.');
+]]></query>
+        </action>
+
+        <!-- Install mail template: plugin_update_found -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'plugin_update_found') x
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates`
+(`type`,`language`,`subject`,`html`,`plaintext`) VALUES
+    ('plugin_update_found', '*', '⚠️ [SOFTWARE_NAME] [NEW_VERSION] is available for installation on “[SITE_NAME]”', '<div class="akemail-outer-wrapper">
+<table>
+<tbody>
+<tr>
+<td width="10%">&nbsp;</td>
+<td>
+<div class="akemail-wrapper">
+<div class="akemail-container"><!-- Logo Header -->
+<div class="akemail-logo"><a href="[URL]">&nbsp;<img src="[URL]/media/images/logo_bw.svg" alt="Panopticon &mdash; Site Monitoring">&nbsp;</a></div>
+<!-- Hello -->
+<div class="akemail-hello">
+<p>Hello,</p>
+</div>
+<!-- Main-Topic -->
+<div class="akemail-main-topic">
+<p>[SOFTWARE_NAME] [NEW_VERSION] is available on &ldquo;[SITE_NAME]&rdquo;</p>
+</div>
+<!-- Message -->
+<div class="akemail-message">
+<p>[SOFTWARE_NAME] version [NEW_VERSION] is now available for installation on your site &ldquo;<a href="[SITE_URL]">[SITE_NAME]</a>&rdquo;. Your site is currently running the older version [OLD_VERSION].</p>
+</div>
+<!-- Area Offer/Announcement -->
+<div class="akemail-announcement">
+<div class="akemail-announcement-box">
+<h3>Action required</h3>
+<p>The new version will <strong>NOT</strong> be installed automatically. You will have to install it yourself.</p>
+</div>
+<p class="akemail-announcement-note"><em>Note</em>: Akeeba Panopticon can be configured to install new versions of [SOFTWARE_NAME] automatically.</p>
+<p class="akemail-announcement-visitlink">You can install the new [SOFTWARE_NAME] version either from your site''s wp-admin page, or through the main control panel of <a href="[URL]">your Akeeba Panopticon installation</a>.</p>
+</div>
+<!-- Bye, Bye -->
+<div class="akemail-outro">
+<p>Have a great day!</p>
+</div>
+<!-- Footer -->
+<div class="akemail-footer">
+<p class="akemail-footer-sitelink">&nbsp;<a href="[URL]">Panopticon &mdash; Site Monitoring</a></p>
+</div>
+</div>
+<!-- Legal info -->
+<div class="akemail-legalinfo">
+<p>This is an automated email. Please do not reply to it.</p>
+</div>
+</div>
+</td>
+<td width="10%">&nbsp;</td>
+</tr>
+</tbody>
+</table>
+</div>', 'Hello,
+
+
+[SOFTWARE_NAME] [NEW_VERSION] is available on “[SITE_NAME]”
+
+
+[SOFTWARE_NAME] version [NEW_VERSION] is now available for installation on
+your site “[SITE_NAME] [SITE_URL]”. Your site is currently
+running the older version [OLD_VERSION].
+
+
+==============================================================================
+! ! ! ! !  ACTION REQUIRED  ! ! ! ! !
+==============================================================================
+
+The new version will NOT be installed automatically. You will have to
+install it yourself.
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Note: Akeeba Panopticon can be configured to install new versions of
+[SOFTWARE_NAME] automatically.
+
+==============================================================================
+
+
+You can install the new [SOFTWARE_NAME] version either from
+your site''s wp-admin page, or through the main control panel of your
+Akeeba Panopticon installation ([URL]).
+
+Have a great day!
+
+------------------------------------------------------------------------------
+
+This email was sent by the Panopticon installation on [URL].
+This is an automated email. Please do not reply to it.
+');
+]]></query>
+        </action>
+
+        <!-- Install mail template: plugins_update_done -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'plugins_update_done') x
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates`
+(`type`,`language`,`subject`,`html`,`plaintext`) VALUES
+    ('plugins_update_done', '*', 'Automatic software updates on [SITE_NAME]', '<div class="akemail-outer-wrapper">
+<table>
+<tbody>
+<tr>
+<td width="10%">&nbsp;</td>
+<td>
+<div class="akemail-wrapper">
+<div class="akemail-container"><!-- Logo Header -->
+<div class="akemail-logo"><a href="[URL]">&nbsp;<img src="[URL]/media/images/logo_bw.svg" alt="Panopticon &mdash; Site Monitoring">&nbsp;</a></div>
+<!-- Hello -->
+<div class="akemail-hello">
+<p>Hello,</p>
+</div>
+[RENDERED_HTML] <!-- Bye, Bye -->
+<div class="akemail-outro">
+<p>Have a great day!</p>
+</div>
+<!-- Footer -->
+<div class="akemail-footer">
+<p class="akemail-footer-sitelink">&nbsp;<a href="[URL]">Panopticon &mdash; Site Monitoring</a></p>
+</div>
+</div>
+<!-- Legal info -->
+<div class="akemail-legalinfo">
+<p>This is an automated email. Please do not reply to it.</p>
+</div>
+</div>
+</td>
+<td width="10%">&nbsp;</td>
+</tr>
+</tbody>
+</table>
+</div>', 'Hello,
+
+
+[RENDERED_TEXT]
+
+
+Have a great day!
+
+------------------------------------------------------------------------------
+
+This email was sent by the Panopticon installation on [URL]
+This is an automated email. Please do not reply to it.');
+]]></query>
+        </action>
+
+        <!-- Install mail template: domain_expiring -->
+        <action table="#__mailtemplates" canfail="1">
+            <condition type="equals" operator="not" value="1"><![CDATA[
+SELECT IF(myCount >= 1, 1, 0) AS `condition` FROM (SELECT COUNT(*) AS `myCount` FROM `#__mailtemplates` WHERE `type` = 'domain_expiring') x
+            ]]></condition>
+            <query><![CDATA[
+INSERT INTO `#__mailtemplates` (type, language, subject, html, plaintext) values ('domain_expiring', '*', '⚠️ The domain name for “[SITE_NAME]” expires soon', '<div class="akemail-outer-wrapper">
+<table>
+<tbody>
+<tr>
+<td width="10%">&nbsp;</td>
+<td>
+<div class="akemail-wrapper">
+<div class="akemail-container"><!-- Logo Header -->
+<div class="akemail-logo"><a href="[URL]">&nbsp;<img src="[URL]/media/images/logo_bw.svg" alt="Panopticon &mdash; Site Monitoring">&nbsp;</a></div>
+<!-- Hello -->
+<div class="akemail-hello">
+<p>Hello,</p>
+</div>
+<!-- Main-Topic -->
+<div class="akemail-main-topic">
+<p>The domain name for &ldquo;[SITE_NAME]&rdquo; expires soon</p>
+</div>
+<!-- Message -->
+<div class="akemail-message">
+<p>The domain name <code>[DOMAIN]</code> for your site &ldquo;<a href="[SITE_URL]">[SITE_NAME]</a>&rdquo; will expire soon, on [EXPIRATION]. Please renew your domain name with your registrar ([REGISTRAR]) to prevent losing access to your domain name, and therefore your site.</p>
+<p><strong>ℹ️ Kind reminder</strong>: If you let your domain expire someone else may register it. In this case, you will be unable to use this domain name for your site and email.</p>
+</div>
+<!-- Area Offer/Announcement -->
+<div class="akemail-announcement">
+<div class="akemail-announcement-box">
+<h3>Action required</h3>
+<p>You need to renew your domain name, [DOMAIN].</p>
+</div>
+<p class="akemail-announcement-note"><em>Note</em>: Akeeba Panopticon cannot renew domains. This is something you need to do manually through your registrar which may be different than the hosting company you use for your site. If you have already renewed your domain, don''t panic; the domain registration information publicly available to tools like Akeeba Panopticon takes a few days to be updated.</p>
+</div>
+<div class="akemail-outro">
+<p>Have a great day!</p>
+</div>
+<!-- Footer -->
+<div class="akemail-footer">
+<p class="akemail-footer-sitelink">&nbsp;<a href="[URL]">Panopticon &mdash; Site Monitoring</a></p>
+</div>
+</div>
+<!-- Legal info -->
+<div class="akemail-legalinfo">
+<p>This is an automated email. Please do not reply to it.</p>
+</div>
+</div>
+</td>
+<td width="10%">&nbsp;</td>
+</tr>
+</tbody>
+</table>
+</div>', 'Hello,
+
+
+The domain name for “[SITE_NAME]” expires soon
+
+
+The domain name [DOMAIN] for your site “[SITE_NAME] [/[SITE_URL]]”
+will expire soon, on [EXPIRATION]. Please renew your domain name with
+your registrar ([REGISTRAR]) to prevent losing access to your domain
+name, and therefore your site.
+
+ℹ️ KIND REMINDER: If you let your domain expire someone else may
+register it. In this case, you will be unable to use this domain name
+for your site and email.
+
+==============================================================================
+! ! ! ! !  ACTION REQUIRED  ! ! ! ! !
+==============================================================================
+
+You need to renew your domain name, [DOMAIN].
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+_Note_: Akeeba Panopticon cannot renew domains. This is something you
+need to do manually through your registrar which may be different than
+the hosting company you use for your site. If you have already renewed
+your domain, don''t panic; the domain registration information publicly
+available to tools like Akeeba Panopticon takes a few days to be updated.
+
+==============================================================================
+
+Have a great day!
+
+------------------------------------------------------------------------------
+
+This email was sent by the Panopticon installation on [URL]
+This is an automated email. Please do not reply to it.');
 ]]></query>
         </action>
 

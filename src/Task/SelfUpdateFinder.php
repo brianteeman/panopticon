@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,8 +9,6 @@ namespace Akeeba\Panopticon\Task;
 
 defined('AKEEBA') || die;
 
-use Akeeba\Panopticon\Library\Queue\QueueItem;
-use Akeeba\Panopticon\Library\Queue\QueueTypeEnum;
 use Akeeba\Panopticon\Library\Task\AbstractCallback;
 use Akeeba\Panopticon\Library\Task\Attribute\AsTask;
 use Akeeba\Panopticon\Library\Task\Status;
@@ -18,8 +16,6 @@ use Akeeba\Panopticon\Model\Selfupdate;
 use Akeeba\Panopticon\Task\Trait\EmailSendingTrait;
 use Awf\Registry\Registry;
 use Awf\User\User;
-use Psr\Cache\CacheException;
-use Psr\Cache\InvalidArgumentException;
 
 #[AsTask(
 	name: 'selfupdatefinder',
@@ -31,9 +27,6 @@ class SelfUpdateFinder extends AbstractCallback
 
 	public function __invoke(object $task, Registry $storage): int
 	{
-		$task->params ??= new Registry();
-		$params       = ($task->params instanceof Registry) ? $task->params : new Registry($task->params);
-
 		$this->logger->info('Checking for Panopticon updates');
 
 		/** @var Selfupdate $model */

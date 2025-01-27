@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -10,6 +10,9 @@ namespace Akeeba\Panopticon\Controller;
 defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Controller\Trait\ACLTrait;
+use Akeeba\Panopticon\Factory;
+use Akeeba\Panopticon\Library\Passkey\Authentication;
+use Akeeba\Panopticon\View\Users\Html;
 use Awf\Mvc\DataController;
 use Awf\Utils\ArrayHelper;
 use RuntimeException;
@@ -25,8 +28,166 @@ class Users extends DataController
 		return parent::execute($task);
 	}
 
+	/**
+	 * Password reset request
+	 *
+	 * @return  void
+	 * @throws  \Exception
+	 * @since   1.3.0
+	 */
+	public function pwreset(): void
+	{
+		$username = $this->input->getUsername('username', '');
+		$email    = $this->input->get('email', '', 'raw');
+
+		if (empty($username) || empty($email))
+		{
+			$this->getView()->setLayout('pwreset');
+			$this->display();
+
+			return;
+		}
+
+		/** @var \Akeeba\Panopticon\Model\Users $model */
+		$model = $this->getModel();
+		$logger = Factory::getContainer()->loggerFactory->get('login');
+
+		try
+		{
+			$model->createPasswordResetRequest($username, $email);
+
+			$logger->info(
+				sprintf(
+					'Created a password reset request for username ‘%s’, email ‘%s’',
+					$username,
+					$email
+				)
+			);
+
+			$message = Factory::getContainer()->language->text('PANOPTICON_USERS_LBL_PWRESET_SENT');
+			$type    = 'info';
+		}
+		catch (\Throwable $e)
+		{
+			$logger->warning(
+				sprintf(
+					'Could not create a password reset request for username ‘%s’, email ‘%s’. Reason: %s',
+					$username,
+					$email,
+					$e->getMessage()
+				)
+			);
+
+			$message = $e->getMessage();
+			$type    = 'error';
+		}
+
+		$this->setRedirect(
+			Factory::getContainer()->router->route('index.php'),
+			$message,
+			$type
+		);
+	}
+
+	/**
+	 * Password reset confirmation
+	 *
+	 * @return  void
+	 * @throws  \Exception
+	 * @since   1.3.0
+	 */
+	public function confirmreset(): void
+	{
+		$container = Factory::getContainer();
+		$router    = $container->router;
+		$lang      = $container->language;
+
+		$id       = $this->input->getInt('id', 0);
+		$token    = $this->input->getString('token', '');
+		$password = $this->input->get('password', '', 'raw');
+
+		// We need a user ID
+		if ($id == 0)
+		{
+			$this->setRedirect($router->route('index.php'));
+
+			return;
+		}
+
+		// We need a valid user which can be password-reset and is in the process of having their password reset.
+		$user = $container->userManager->getUser($id);
+
+		if (!$user || !$this->getModel()->canResetPassword($user) || empty($user->getParameters()->get('pwreset.secret', null)))
+		{
+			$this->setRedirect($router->route('index.php'));
+
+			return;
+		}
+
+		// If no token or password was provided, ask the user for the token.
+		if (empty($token) || empty($password))
+		{
+			/** @var Html $view */
+			$view        = $this->getView();
+			$view->user  = $user;
+			$view->token = $token;
+
+			$view->setLayout('confirmreset');
+			$this->display();
+
+			return;
+		}
+
+		$logger = Factory::getContainer()->loggerFactory->get('login');
+
+		try
+		{
+			$logger->debug(
+				sprintf(
+					'Evaluating password reset for username ‘%s’.',
+					$user->getUsername()
+				)
+			);
+			$this->getModel()->passwordReset($user, $token, $password);
+
+			$logger->info(
+				sprintf(
+					'Successful password reset for username ‘%s’.',
+					$user->getUsername()
+				)
+			);
+
+			$message = $lang->text('PANOPTICON_USERS_LBL_PWRESET_RESET');
+			$type    = 'success';
+		}
+		catch (\Throwable $e)
+		{
+			$logger->error(
+				sprintf(
+					'Failed password reset for username ‘%s’. Reason: %s',
+					$user->getUsername(),
+					$e->getMessage()
+				)
+			);
+
+			// Advance the failed password reset counter
+			$count = ($user->getParameters()->get('pwreset.count', null) ?: 0) + 1;
+			$user->getParameters()->get('pwreset.count', $count);
+			Factory::getContainer()->userManager->saveUser($user);
+
+			// Redirect with error
+			$message = $lang->text('PANOPTICON_USERS_LBL_PWRESET_NOT_RESET');
+			$type    = 'error';
+		}
+
+		$this->setRedirect($router->route('index.php'), $message, $type);
+	}
+
 	protected function onBeforeEdit()
 	{
+		$this->getView()->collapseForMFA     = $this->input->get('collapseForMFA', 0);
+		$this->getView()->collapseForPasskey = $this->input->get('collapseForPasskey', 0);
+
 		return $this->isThisMyOwnUserOrAmISuper();
 	}
 
@@ -58,6 +219,7 @@ class Users extends DataController
 	protected function onBeforeSave()
 	{
 		$this->overrideRedirectForNonSuper();
+		$this->overrideRedirectForForcedMFA();
 
 		return $this->isThisMyOwnUserOrAmISuper();
 	}
@@ -65,13 +227,32 @@ class Users extends DataController
 	protected function onBeforeApply()
 	{
 		$this->overrideRedirectForNonSuper();
+		$this->overrideRedirectForForcedMFA();
 
 		return $this->isThisMyOwnUserOrAmISuper();
+	}
+
+	protected function onAfterApply()
+	{
+		$collapseForMFA     = $this->input->get('collapseForMFA', 0);
+		$collapseForPasskey = $this->input->get('collapseForPasskey', 0);
+
+		if (!$collapseForMFA && !$collapseForPasskey)
+		{
+			return true;
+		}
+
+		$returnUrl = $this->input->getBase64('returnUrl');
+
+		$this->setRedirect(base64_decode($returnUrl));
+
+		return true;
 	}
 
 	protected function onBeforeCancel()
 	{
 		$this->overrideRedirectForNonSuper();
+		$this->overrideRedirectForForcedMFA();
 
 		return $this->isThisMyOwnUserOrAmISuper();
 	}
@@ -101,10 +282,21 @@ class Users extends DataController
 		];
 
 		$params = [
-			'language' => $this->input->post->getCmd('language', ''),
-			'main_layout' => $this->input->post->getCmd('main_layout', 'default'),
+			'language'                  => $this->input->post->getCmd('language', ''),
+			'main_layout'               => $this->input->post->getCmd('main_layout', 'default'),
+			'passkey_login_no_password' => $this->input->post->getBool('passkey_login_no_password', false),
 		];
 
+		// Only allow setting passkey_login_no_password if passkeys are enabled, and the user is allowed to decide.
+		$canDecide = $this->getContainer()->mvcFactory->makeTempModel('Passkeys')->isEnabled()
+		             && $this->getContainer()->appConfig->get('passkey_login_no_password', 'user') === 'user';
+
+		if (!$canDecide)
+		{
+			unset($params['passkey_login_no_password']);
+		}
+
+		// Apply groups if the editing user is a Super User
 		if (!$myself->getPrivilege('panopticon.super'))
 		{
 			$data['username']    = $savedUser->getUsername();
@@ -127,7 +319,9 @@ class Users extends DataController
 
 				if (empty($username))
 				{
-					throw new RuntimeException($this->getLanguage()->text('PANOPTICON_SETUP_ERR_USER_EMPTYUSERNAME'), 403);
+					throw new RuntimeException(
+						$this->getLanguage()->text('PANOPTICON_SETUP_ERR_USER_EMPTYUSERNAME'), 403
+					);
 				}
 
 				// Is there another user by the same username?
@@ -137,7 +331,8 @@ class Users extends DataController
 					) !== null)
 				{
 					throw new RuntimeException(
-						$this->getLanguage()->sprintf('PANOPTICON_USERS_ERR_USERNAME_EXISTS', htmlentities($username)), 403
+						$this->getLanguage()->sprintf('PANOPTICON_USERS_ERR_USERNAME_EXISTS', htmlentities($username)),
+						403
 					);
 				}
 
@@ -160,7 +355,9 @@ class Users extends DataController
 				}
 				elseif (!$passwordsMatch)
 				{
-					throw new RuntimeException($this->getLanguage()->text('PANOPTICON_USERS_ERR_PASSWORD_MISMATCH'), 403);
+					throw new RuntimeException(
+						$this->getLanguage()->text('PANOPTICON_USERS_ERR_PASSWORD_MISMATCH'), 403
+					);
 				}
 
 				$savedUser->setPassword($password);
@@ -205,7 +402,9 @@ class Users extends DataController
 						'panopticon.super', $permissions
 					))
 				{
-					throw new RuntimeException($this->getLanguage()->text('PANOPTICON_USERS_ERR_CANT_REMOVE_SELF_SUPER'), 403);
+					throw new RuntimeException(
+						$this->getLanguage()->text('PANOPTICON_USERS_ERR_CANT_REMOVE_SELF_SUPER'), 403
+					);
 				}
 
 				foreach (['super', 'admin', 'view', 'run', 'addown', 'editown'] as $k)
@@ -224,6 +423,11 @@ class Users extends DataController
 			{
 				$savedUser->getParameters()->set($k, $v);
 			}
+
+			// Remove the password reset information
+			$savedUser->getParameters()->set('pwreset.timestamp', 0);
+			$savedUser->getParameters()->set('pwreset.count', 0);
+			$savedUser->getParameters()->set('pwreset.secret', '');
 
 			$this->container->userManager->saveUser($savedUser);
 
@@ -322,4 +526,60 @@ class Users extends DataController
 		$this->input->set('returnurl', base64_encode($returnUrl));
 	}
 
+	private function overrideRedirectForForcedMFA()
+	{
+		$collapseForMFA     = $this->input->get('collapseForMFA', 0);
+		$collapseForPasskey = $this->input->get('collapseForPasskey', 0);
+
+		if (!$collapseForMFA && !$collapseForPasskey)
+		{
+			return;
+		}
+
+		// $collapseForMFA is TRUE
+		if ($collapseForMFA)
+		{
+			if (!$this->getContainer()->application->userNeedsMFARecords())
+			{
+				$returnUrl = $this->getContainer()->router->route("index.php");
+				$this->input->set('returnurl', base64_encode($returnUrl));
+
+				return;
+			}
+
+			$user      = $this->getContainer()->userManager->getUser();
+			$returnUrl = $this->getContainer()->router->route(
+				sprintf(
+					"index.php?view=users&task=edit&id=%s&collapseForMFA=1",
+					$user->getId()
+				)
+			);
+
+			$this->input->set('returnurl', base64_encode($returnUrl));
+
+			return;
+		}
+
+		// $collapseForPasskey is TRUE
+		$user         = $this->getContainer()->userManager->getUser();
+		$needsPasskey = count((new Authentication())->getCredentialsRepository()->getAll($user->getId())) == 0;
+
+		if (!$needsPasskey)
+		{
+			$returnUrl = $this->getContainer()->router->route("index.php");
+			$this->input->set('returnurl', base64_encode($returnUrl));
+
+			return;
+		}
+
+		$user      = $this->getContainer()->userManager->getUser();
+		$returnUrl = $this->getContainer()->router->route(
+			sprintf(
+				"index.php?view=users&task=edit&id=%s&collapseForPasskey=1",
+				$user->getId()
+			)
+		);
+
+		$this->input->set('returnurl', base64_encode($returnUrl));
+	}
 }

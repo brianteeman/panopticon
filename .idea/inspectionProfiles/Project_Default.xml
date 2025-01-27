@@ -1,0 +1,5 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <inspection_tool class="SwJsonUnresolvedReferencesInspection" enabled="false" level="ERROR" enabled_by_default="false" />
+  </profile>
+</component>

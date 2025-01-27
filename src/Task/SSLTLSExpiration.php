@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -185,15 +185,15 @@ class SSLTLSExpiration extends AbstractCallback
 		if (is_int($warnDays))
 		{
 			$query->where(
-				'DATE_SUB(' . $query->jsonExtract('config', '$.ssl.validTo') . ', INTERVAL '
+				'DATE_SUB(CAST(' . $query->jsonExtract('config', '$.ssl.validTo') . ' AS DATETIME), INTERVAL '
 				. $warnDays . ' DAY) <= NOW()'
 			);
 		}
 		else
 		{
 			$query->where(
-				'DATE_SUB(' . $query->jsonExtract('config', '$.ssl.validTo') . ', INTERVAL '
-				. 'CAST(IFNULL(' . $query->jsonExtract('config', '$.config.ssl.warning') . ', 7) AS JSON) * 1 DAY)'
+				'DATE_SUB(CAST(' . $query->jsonExtract('config', '$.ssl.validTo') . ' AS DATETIME), INTERVAL '
+				. 'CAST(IFNULL(' . $query->jsonExtract('config', '$.config.ssl.warning') . ', 7) AS FLOAT) DAY)'
 				. ' <= NOW()'
 			);
 		}
@@ -297,6 +297,8 @@ class SSLTLSExpiration extends AbstractCallback
 		$data->set('email_variables_by_lang', $perLanguageVariables);
 		$data->set('permissions', ['panopticon.super', 'panopticon.admin', 'panopticon.editown']);
 		$data->set('email_cc', $this->getSiteNotificationEmails($siteConfig->toObject()));
+
+		$this->logger->debug("Sending email ssl_tls_expiring (SSL/TLS certificate expiration warning)", $data->toArray());
 
 		$this->enqueueEmail($data, $site->id, 'now');
 	}

@@ -1,11 +1,13 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
 defined('AKEEBA') || die;
+
+use \Akeeba\Panopticon\Library\Enumerations\CMSType;
 
 /**
  * @var \Akeeba\Panopticon\View\Sysconfig\Html $this
@@ -80,6 +82,10 @@ $config = $this->container->appConfig;
             <caption class="visually-hidden">@lang('PANOPTICON_SYSCONFIG_LBL_EXTENSIONS_TABLE_CAPTION')</caption>
             <thead class="table-dark">
             <tr>
+                <th class="w-auto">
+                    <span class="fa fa-server" aria-hidden="true"></span>
+                    <span class="visually-hidden">@lang('PANOPTICON_SYSCONFIG_LBL_EXTENSIONS_CMS')</span>
+                </th>
                 <th>
                     @lang('PANOPTICON_SYSCONFIG_LBL_EXTENSIONS_NAME')
                 </th>
@@ -94,6 +100,18 @@ $config = $this->container->appConfig;
             <tbody>
             @foreach ($this->extUpdatePreferences as $key => $item)
             <tr class="extensions-filterable-row">
+                <td>
+                    @if($item->cmsType === CMSType::JOOMLA->value)
+                        <span class="fab fa-joomla text-secondary" aria-hidden="true"></span>
+                        <span class="visually-hidden">@lang('PANOPTICON_SITE_LBL_CMSTYPE_OPT_JOOMLA')</span>
+                    @elseif($item->cmsType === CMSType::WORDPRESS->value)
+                        <span class="fab fa-wordpress text-primary" aria-hidden="true"></span>
+                        <span class="visually-hidden">@lang('PANOPTICON_SITE_LBL_CMSTYPE_OPT_WORDPRESS')</span>
+                    @else
+                        <span class="fa fa-globe" aria-hidden="true"></span>
+                        <span class="visually-hidden">@lang('PANOPTICON_SITE_LBL_CMSTYPE_OPT_OTHER')</span>
+                    @endif
+                </td>
                 <td>
                     <span class="text-body-tertiary pe-2">
                         @if ($item->type === 'component')
@@ -122,7 +140,7 @@ $config = $this->container->appConfig;
                      <span class="extensions-filterable-name">
                          {{{ strip_tags($item->name) }}}
                      </span>
-                    <div class="small text-muted font-monospace extensions-filterable-key">{{{ ltrim($key, 'a') }}}</div>
+                    <div class="small text-muted font-monospace extensions-filterable-key">{{{ str_starts_with($key, 'atpl_') || str_starts_with($key, 'amod_') ? ltrim($key, 'a') : $key }}}</div>
                 </td>
                 <td class="d-none d-lg-table-cell">
                     <div class="small extensions-filterable-author">
@@ -150,7 +168,7 @@ $config = $this->container->appConfig;
                             'required' => 'required',
                         ];
 
-                        if ($key === 'pkg_panopticon')
+                        if ($key === 'pkg_panopticon' || str_ends_with($key, '_panopticon.php'))
                         {
                             $attribs['disabled'] = true;
                             $item->preference    = 'major';

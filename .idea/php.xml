@@ -75,7 +75,6 @@
       <path value="$PROJECT_DIR$/vendor/symfony/service-contracts" />
       <path value="$PROJECT_DIR$/vendor/symfony/polyfill-intl-grapheme" />
       <path value="$PROJECT_DIR$/vendor/jfcherng/php-mb-string" />
-      <path value="$PROJECT_DIR$/vendor/web-auth/metadata-service" />
       <path value="$PROJECT_DIR$/vendor/web-auth/webauthn-lib" />
       <path value="$PROJECT_DIR$/vendor/mcrumley/php-complexify" />
       <path value="$PROJECT_DIR$/vendor/lcobucci/clock" />
@@ -122,7 +121,6 @@
       <path value="$PROJECT_DIR$/vendor/scrivo/highlight.php" />
       <path value="$PROJECT_DIR$/vendor/league/commonmark" />
       <path value="$PROJECT_DIR$/vendor/league/config" />
-      <path value="$PROJECT_DIR$/vendor/akeeba/awf" />
       <path value="$PROJECT_DIR$/vendor/symfony/polyfill-uuid" />
       <path value="$PROJECT_DIR$/vendor/symfony/var-dumper" />
       <path value="$PROJECT_DIR$/vendor/symfony/event-dispatcher" />
@@ -131,6 +129,11 @@
       <path value="$PROJECT_DIR$/vendor/symfony/cache" />
       <path value="$PROJECT_DIR$/vendor/symfony/polyfill-php80" />
       <path value="$PROJECT_DIR$/vendor/symfony/serializer" />
+      <path value="$PROJECT_DIR$/vendor/akeeba/awf" />
+      <path value="$PROJECT_DIR$/vendor/web-auth/metadata-service" />
+      <path value="$PROJECT_DIR$/vendor/io-developer/php-whois" />
+      <path value="$PROJECT_DIR$/vendor/symfony/polyfill-intl-idn" />
+      <path value="$PROJECT_DIR$/vendor/akeeba/phpfinder" />
     </include_path>
   </component>
   <component name="PhpProjectSharedConfiguration" php_language_level="8.1" />

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -85,7 +85,10 @@ class Selfupdate extends Model
 	 *
 	 * The application must not break when these folders are present.
 	 */
-	private const REMOVE_FOLDERS = [];
+	private const REMOVE_FOLDERS = [
+		'src/Library/JoomlaVersion',
+		'src/Library/PhpVersion',
+	];
 
 	/**
 	 * @var string The currently installed version
@@ -290,7 +293,7 @@ class Selfupdate extends Model
 			if (is_file($targetLocation))
 			{
 				$oldLength = @filesize($targetLocation) ?: 0;
-				$oldMD5    = md5_file($targetLocation) ?: '00000000000000000000000000000000';
+				$oldMD5    = hash_file('md5', $targetLocation) ?: '00000000000000000000000000000000';
 				$response  = $httpClient->head($url, $options);
 				$newLength = $response->getHeader('Content-Length');
 				$newMD5    = $response->getHeader('Content-MD5');
@@ -399,6 +402,55 @@ class Selfupdate extends Model
 		$zip->close();
 
 		return $result;
+	}
+
+	/**
+	 * Invalidate OPcache for the .php files installed by extracting an update ZIP file.
+	 *
+	 * @param   string  $zipFilePath  The absolute filesystem path to the ZIP file.
+	 * @param   string  $targetPath   The absolute filesystem path of the extraction root.
+	 *
+	 * @return  void
+	 * @since   1.3.0
+	 */
+	public function invalidatePHPFiles(string $zipFilePath, string $targetPath = APATH_ROOT): void
+	{
+		if (!function_exists('opcache_invalidate'))
+		{
+			return;
+		}
+
+		$zip = new ZipArchive();
+		$zip->open($zipFilePath, ZipArchive::RDONLY);
+
+		$targetPath = rtrim($targetPath, '/\\');
+
+		for ($i = 0; $i < $zip->numFiles; $i++)
+		{
+			$fileName = $zip->getNameIndex($i);
+
+			if (!str_ends_with($fileName, '.php'))
+			{
+				continue;
+			}
+
+			opcache_invalidate($targetPath . '/' . ltrim($fileName, '/\\'), true);
+		}
+
+		$zip->close();
+
+		unset($zip);
+	}
+
+	/**
+	 * Clear the precompiled Blade templates after installing an update
+	 *
+	 * @return  void
+	 * @since   1.3.0
+	 */
+	public function clearCompiledTemplates(): void
+	{
+		$this->container->fileSystem->rmdir(APATH_TMP . '/compiled_templates');
 	}
 
 	/**

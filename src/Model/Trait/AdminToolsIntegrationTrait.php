@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,6 +11,7 @@ defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Container;
 use Akeeba\Panopticon\Library\Cache\CallbackController;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Model\Task;
 use Akeeba\Panopticon\Task\Trait\AdminToolsTrait;
@@ -53,7 +54,7 @@ trait AdminToolsIntegrationTrait
 
 		/** @var Client $httpClient */
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
-		[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/panopticon/admintools/unblock');
+		[$url, $options] = $this->adminToolsGetRequestOptions('/v1/panopticon/admintools/unblock');
 
 		$ip = array_map(
 			fn($x) => is_string($x) ? trim($x) : null,
@@ -84,12 +85,12 @@ trait AdminToolsIntegrationTrait
 
 		/** @var Client $httpClient */
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
-		[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/panopticon/admintools/plugin/disable');
+		[$url, $options] = $this->adminToolsGetRequestOptions('/v1/panopticon/admintools/plugin/disable');
 
 		$result = json_decode(
 			$this->sanitizeJson($httpClient->post($url, $options)->getBody()->getContents())
 		);
-		$return = $result?->data?->attributes ?? null;
+		$return = $this->adminToolsExtractResult($result);
 
 		$config   = $this->getConfig();
 		$oldValue = $config->get('core.admintools.renamed', false);
@@ -113,12 +114,12 @@ trait AdminToolsIntegrationTrait
 
 		/** @var Client $httpClient */
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
-		[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/panopticon/admintools/plugin/enable');
+		[$url, $options] = $this->adminToolsGetRequestOptions('/v1/panopticon/admintools/plugin/enable');
 
 		$result = json_decode(
 			$this->sanitizeJson($httpClient->post($url, $options)->getBody()->getContents())
 		);
-		$return = $result?->data?->attributes ?? null;
+		$return = $this->adminToolsExtractResult($result);
 
 		$config   = $this->getConfig();
 		$oldValue = $config->get('core.admintools.renamed', false);
@@ -142,13 +143,13 @@ trait AdminToolsIntegrationTrait
 
 		/** @var Client $httpClient */
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
-		[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/panopticon/admintools/htaccess/disable');
+		[$url, $options] = $this->adminToolsGetRequestOptions('/v1/panopticon/admintools/htaccess/disable');
 
 		$result = json_decode(
 			$this->sanitizeJson($httpClient->post($url, $options)->getBody()->getContents())
 		);
 
-		return $result?->data?->attributes ?? null;
+		return $this->adminToolsExtractResult($result);
 	}
 
 	public function adminToolsHtaccessEnable(): ?object
@@ -160,13 +161,13 @@ trait AdminToolsIntegrationTrait
 
 		/** @var Client $httpClient */
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
-		[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/panopticon/admintools/htaccess/enable');
+		[$url, $options] = $this->adminToolsGetRequestOptions('/v1/panopticon/admintools/htaccess/enable');
 
 		$result = json_decode(
 			$this->sanitizeJson($httpClient->post($url, $options)->getBody()->getContents())
 		);
 
-		return $result?->data?->attributes ?? null;
+		return $this->adminToolsExtractResult($result);
 	}
 
 	public function adminToolsTempSuperUser(?Date $expiration = null): ?object
@@ -178,7 +179,7 @@ trait AdminToolsIntegrationTrait
 
 		/** @var Client $httpClient */
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
-		[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/panopticon/admintools/tempsuperuser');
+		[$url, $options] = $this->adminToolsGetRequestOptions('/v1/panopticon/admintools/tempsuperuser');
 
 		if (!is_null($expiration))
 		{
@@ -191,7 +192,7 @@ trait AdminToolsIntegrationTrait
 			$this->sanitizeJson($httpClient->post($url, $options)->getBody()->getContents())
 		);
 
-		return $result?->data?->attributes ?? null;
+		return $this->adminToolsExtractResult($result);
 	}
 
 	public function adminToolsGetScans(bool $cache = true, int $from = 0, int $limit = 10): ?object
@@ -207,7 +208,7 @@ trait AdminToolsIntegrationTrait
 			callback: function (int $from, int $limit) {
 				/** @var Client $httpClient */
 				$httpClient = $this->container->httpFactory->makeClient(cache: false);
-				[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/panopticon/admintools/scans');
+				[$url, $options] = $this->adminToolsGetRequestOptions('/v1/panopticon/admintools/scans');
 
 				$uri = new Uri($url);
 				$uri->setVar('page[offset]', $from);
@@ -225,7 +226,11 @@ trait AdminToolsIntegrationTrait
 				return (object) [
 					'pages' => ((array) ($result?->meta ?? []))['total-pages'] ?? 1,
 					'items' => array_map(
-						fn(?object $x) => $x?->attributes ?? null,
+						fn(?object $x) => match ($this->cmsType()) {
+							CMSType::JOOMLA => $x?->attributes ?? null,
+							CMSType::WORDPRESS => $x ?? null,
+							CMSType::UNKNOWN => null
+						},
 						$result?->data ?? []
 					),
 				];
@@ -249,9 +254,8 @@ trait AdminToolsIntegrationTrait
 			callback: function (int $scanId, int $from, int $limit): ?object {
 				/** @var Client $httpClient */
 				$httpClient = $this->container->httpFactory->makeClient(cache: false);
-				[$url, $options] = $this->getRequestOptions(
-					$this,
-					sprintf('/index.php/v1/panopticon/admintools/scan/%d', $scanId)
+				[$url, $options] = $this->adminToolsGetRequestOptions(
+					sprintf('/v1/panopticon/admintools/scan/%d', $scanId)
 				);
 
 				$uri = new Uri($url);
@@ -270,7 +274,11 @@ trait AdminToolsIntegrationTrait
 				return (object) [
 					'pages' => ((array) ($result?->meta ?? []))['total-pages'] ?? 1,
 					'items' => array_map(
-						fn(?object $x) => $x?->attributes ?? null,
+						fn(?object $x) => match ($this->cmsType()) {
+							CMSType::JOOMLA => $x?->attributes ?? null,
+							CMSType::WORDPRESS => $x ?? null,
+							CMSType::UNKNOWN => null
+						},
 						$result?->data ?? []
 					),
 				];
@@ -293,9 +301,8 @@ trait AdminToolsIntegrationTrait
 			callback: function (int $scanAlertId): ?object {
 				/** @var Client $httpClient */
 				$httpClient = $this->container->httpFactory->makeClient(cache: false);
-				[$url, $options] = $this->getRequestOptions(
-					$this,
-					sprintf('/index.php/v1/panopticon/admintools/scanalert/%d', $scanAlertId)
+				[$url, $options] = $this->adminToolsGetRequestOptions(
+					sprintf('/v1/panopticon/admintools/scanalert/%d', $scanAlertId)
 				);
 
 				$result = json_decode(
@@ -307,7 +314,11 @@ trait AdminToolsIntegrationTrait
 					return null;
 				}
 
-				return $result?->data?->attributes ?? null;
+				return match ($this->cmsType()) {
+					CMSType::JOOMLA => $result?->data?->attributes ?? null,
+					CMSType::WORDPRESS => $result?->data ?? null,
+					CMSType::UNKNOWN => null
+				};
 			},
 			args: [$scanAlertId],
 			id: sprintf('scanalert-%d', $scanAlertId),
@@ -431,6 +442,30 @@ trait AdminToolsIntegrationTrait
 		);
 	}
 
+	public function adminToolsWordPressPluginSlug(): ?string
+	{
+		if ($this->cmsType() !== CMSType::WORDPRESS)
+		{
+			return null;
+		}
+
+		$items = array_filter(
+			(array) $this->getConfig()->get('extensions.list'),
+			fn(object $item) => $item->type === 'plugin'
+			                    && $item->element === 'admintoolswp.php'
+			                    && str_contains($item->name, 'Professional')
+		);
+
+		if (empty($items))
+		{
+			return null;
+		}
+
+		$item = array_pop($items);
+
+		return $item?->extension_id ?? null;
+	}
+
 	/**
 	 * Get the cache controller for requests to Akeeba Backup
 	 *
@@ -449,5 +484,23 @@ trait AdminToolsIntegrationTrait
 		}
 
 		return $this->callbackControllerForAdminTools;
+	}
+
+	private function adminToolsGetRequestOptions(string $path): array
+	{
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->getRequestOptions($this, '/index.php' . $path),
+			CMSType::WORDPRESS => $this->getRequestOptions($this, $path),
+			default => [null, null],
+		};
+	}
+
+	private function adminToolsExtractResult(mixed $result): mixed
+	{
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $result?->data?->attributes ?? null,
+			CMSType::WORDPRESS => $result,
+			default => null,
+		};
 	}
 }

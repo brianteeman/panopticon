@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -79,7 +79,7 @@ defined('AKEEBA') || die;
 @section('main-default-sites')
     <template id="sitesListTemplate">
         <div v-if="error !== null"
-             class="alert alert-danger col col-md-6 col-xl-12"
+             class="alert alert-danger col col-md-12 col-xl-12"
         >
             <h4 class="alert-heading">
                 <span class="fa fa-fw fa-exclamation-circle" aria-hidden="true"></span>
@@ -95,7 +95,7 @@ defined('AKEEBA') || die;
         </div>
 
         <div v-if="error === null"
-             class="col col-md-6 col-xl-12 mb-4 d-flex flex-row align-items-center gap-1">
+             class="col col-md-12 col-xl-12 mb-4 d-flex flex-row align-items-center gap-1">
             <div class="progress flex-grow-1 h-75" role="progressbar"
                  aria-label="@lang('PANOPTICON_LOGS_LBL_SR_AUTOREFRESH_TIME')"
                  :aria-valuenow="availableTime"
@@ -141,12 +141,54 @@ defined('AKEEBA') || die;
 
         <div class="col" v-for="site in sites">
             <div class="card h-100">
-                <a :href="site.overview_url" class="text-decoration-none">
                     <h4 class="card-header h6 fw-semibold">
-                        <span class="text-muted fw-light"><small>#&thinsp;</small>@{{ site.id }}</span>&ensp;
-                        <span class="text-decoration-underline link-offset-1">@{{ site.name ?? '' }}</span>
+                        <div class="w-100 d-inline-flex">
+                            <a :href="site.overview_url" class="text-decoration-none flex-grow-1">
+                                <span class="text-muted fw-light"><small>#&thinsp;</small>@{{ site.id }}</span>&ensp;
+                                <span class="text-decoration-underline link-offset-1">@{{ site.name ?? '' }}</span>
+                            </a>
+
+                            <div class="d-inline-block bg-danger rounded-pill px-1 text-bg-dark flex-shrink-1"
+                                 v-if="site.uptime.up === false && !site.uptime.isScheduled"
+                            >
+                                <a v-bind:href="site.uptime.detailsUrl"
+                                   class="text-light text-decoration-none"
+                                   v-if="site.uptime.detailsUrl !== null">
+                                    <span class="fa fa-fw fa-arrow-down" aria-hidden="true"
+                                          v-bs:tooltip.raw="@lang('PANOPTICON_MAIN_SITES_LBL_UPTIME_DOWN')"
+                                    ></span>
+                                    <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_UPTIME_DOWN')</span>
+                                </a>
+                                <span v-if="site.uptime.detailsUrl === null">
+                                    <span class="fa fa-fw fa-arrow-down" aria-hidden="true"
+                                          v-bs:tooltip.raw="@lang('PANOPTICON_MAIN_SITES_LBL_UPTIME_DOWN')"
+                                    ></span>
+                                    <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_UPTIME_DOWN')</span>
+                                </span>
+                            </div>
+
+                            <div class="d-inline-block bg-warning rounded-pill px-1 text-bg-light flex-shrink-1"
+                                 v-if="site.uptime.up === false && site.uptime.isScheduled"
+                            >
+                                <a v-bind:href="site.uptime.detailsUrl"
+                                   class="text-light text-decoration-none"
+                                   v-if="site.uptime.detailsUrl !== null">
+                                    <span class="fa fa-fw fa-hammer" aria-hidden="true"
+                                          v-bs:tooltip.raw="@lang('PANOPTICON_MAIN_SITES_LBL_UPTIME_MAINTENANCE')"
+                                    ></span>
+                                    <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_UPTIME_MAINTENANCE')</span>
+                                </a>
+                                <span v-if="site.uptime.detailsUrl === null">
+                                    <span class="fa fa-fw fa-hammer" aria-hidden="true"
+                                          v-bs:tooltip.raw="@lang('PANOPTICON_MAIN_SITES_LBL_UPTIME_MAINTENANCE')"
+                                    ></span>
+                                    <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_UPTIME_MAINTENANCE')</span>
+                                </span>
+                            </div>
+                        </div>
+
+
                     </h4>
-                </a>
                 <div class="card-body">
                     <div v-if="site.groups.length > 0">
                         <div class="card-subtitle text-end mb-2">
@@ -156,8 +198,8 @@ defined('AKEEBA') || die;
                         </div>
                     </div>
 
-                    <div class="d-flex flex-row gap-2 align-items-start gap-3">
-                        <div class="flex-shrink-1"
+                    <div class="d-flex flex-row align-items-start gap-3">
+                        <div class="flex-shrink-1 d-none d-md-block"
                              v-if="site.favicon"
                         >
                             <img :src="site.favicon" alt=""
@@ -213,13 +255,13 @@ defined('AKEEBA') || die;
                                 </dd>
 
                                 <dt>@lang('PANOPTICON_MAIN_SITES_THEAD_PHP')</dt>
-                                <dd>@{{ site.php }}</dd>
+                                <dd class="text-truncate">@{{ site.php }}</dd>
 
                                 <dt v-if="(site.overrides > 0)">
                                     @lang('PANOPTICON_OVERRIDES_TITLE')
                                 </dt>
                                 <dd v-if="(site.overrides > 0)">
-                                    <span class="badge bg-warning"
+                                    <span class="badge text-bg-warning"
                                           v-bs:tooltip="akeeba.System.Text.plural('PANOPTICON_SITE_LBL_TEMPLATE_OVERRIDES_CHANGED_N', site.overrides)"
                                     >
                                         <span class="fa fa-fw fa-arrows-to-circle" aria-hidden="true"></span>
@@ -276,7 +318,7 @@ defined('AKEEBA') || die;
                                         <span v-if="(site.cms ?? 'joomla') === 'wordpress'">@lang('PANOPTICON_MAIN_DASH_LBL_EXTENSIONS_WP_UPDATE_ERROR')</span>
                                     </span>
 
-                                    <span class="badge bg-warning"
+                                    <span class="badge text-bg-warning"
                                           v-bs:tooltip="akeeba.System.Text.plural('PANOPTICON_MAIN_SITES_LBL_EXT_UPGRADE_N', site.extensions)"
                                     >
                                         <span class="fa fa-fw fa-box-open" aria-hidden="true"></span>

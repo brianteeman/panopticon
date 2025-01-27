@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,10 +9,12 @@ namespace Akeeba\Panopticon\Controller;
 
 
 use Akeeba\Panopticon\Controller\Trait\ACLTrait;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Model\Task;
 use Akeeba\Panopticon\Task\Trait\EnqueueJoomlaUpdateTrait;
+use Akeeba\Panopticon\Task\Trait\EnqueueWordPressUpdateTrait;
 use Awf\Mvc\DataController;
 use Awf\Uri\Uri;
 
@@ -21,6 +23,7 @@ defined('AKEEBA') || die;
 class Coreupdates extends DataController
 {
 	use EnqueueJoomlaUpdateTrait;
+	use EnqueueWordPressUpdateTrait;
 	use ACLTrait;
 
 	public function execute($task)
@@ -93,7 +96,7 @@ class Coreupdates extends DataController
 			}
 
 			// You can only schedule updates if you have the admin or editown privilege on the site
-			$haveGlobalPrivilege = !$user->authorise('panopticon.admin', $site);
+			$haveGlobalPrivilege = $user->authorise('panopticon.admin', $site);
 			$canEditOwn          = $user->authorise('panopticon.editown', $site) && $site->created_by == $user->getId();
 
 			if (!$haveGlobalPrivilege && !$canEditOwn)
@@ -102,12 +105,28 @@ class Coreupdates extends DataController
 			}
 
 			// Enqueue the update
-			if ($site->isJoomlaUpdateTaskScheduled() || $site->isJoomlaUpdateTaskRunning())
+			if ($site->cmsType() === CMSType::JOOMLA)
+			{
+				if ($site->isJoomlaUpdateTaskScheduled() || $site->isJoomlaUpdateTaskRunning())
+				{
+					continue;
+				}
+
+				$this->enqueueJoomlaUpdate($site, $this->getContainer(), user: $user);
+			}
+			elseif ($site->cmsType() === CMSType::WORDPRESS)
+			{
+				if ($site->isWordPressUpdateTaskScheduled() || $site->isWordPressUpdateTaskRunning())
+				{
+					continue;
+				}
+
+				$this->enqueueWordPressUpdate($site, $this->getContainer(), user: $user);
+			}
+			else
 			{
 				continue;
 			}
-
-			$this->enqueueJoomlaUpdate($site, $this->getContainer(), user: $user);
 
 			$numScheduled++;
 		}

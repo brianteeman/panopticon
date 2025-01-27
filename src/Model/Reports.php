@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -269,6 +269,30 @@ class Reports extends DataModel
 		];
 
 		return $item;
+	}
+
+	public static function fromSiteUptime(
+		int $site_id, bool $up = false, ?int $downtimeStart = null, mixed $furtherContext = null
+	)
+	{
+		$context = [
+			'context' => self::furtherContextAsArrayOrNull($furtherContext),
+		];
+
+		if ($up && !empty($downtimeStart))
+		{
+			$context['start']    = $downtimeStart;
+			$context['end']      = time();
+			$context['duration'] = $context['end'] - $context['start'];
+		}
+
+		/** @var static $item */
+		$item             = Factory::getContainer()->mvcFactory->makeTempModel('reports');
+		$item->site_id    = $site_id;
+		$item->created_on = 'now';
+		$item->created_by = Factory::getContainer()->userManager->getUser();
+		$item->action     = $up ? ReportAction::UPTIME_UP : ReportAction::UPTIME_DOWN;
+		$item->context    = $context;
 	}
 
 	/**
@@ -746,7 +770,11 @@ class Reports extends DataModel
 			$created_on = (new DateTime('@' . $created_on))->format(DATE_ATOM);
 		}
 
-		if ($created_on instanceof DateTime)
+		if ($created_on instanceof Date)
+		{
+			$created_on = $created_on->toAtom();
+		}
+		elseif ($created_on instanceof DateTime)
 		{
 			$created_on = $created_on->format(DATE_ATOM);
 		}

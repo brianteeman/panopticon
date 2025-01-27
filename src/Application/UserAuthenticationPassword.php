@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -34,10 +34,10 @@ class UserAuthenticationPassword extends Authentication
 				return $this->timingSafeEquals($parts[1], hash('sha256', $password . $parts[2], false));
 
 			case 'SHA1':
-				return $this->timingSafeEquals($parts[1], sha1($password . $parts[2]));
+				return $this->timingSafeEquals($parts[1], hash('sha1', $password . $parts[2]));
 
 			case 'MD5':
-				return $this->timingSafeEquals($parts[1], md5($password . $parts[2]));
+				return $this->timingSafeEquals($parts[1], hash('md5', $password . $parts[2]));
 		}
 
 		// If all else fails, we assume we can't verify this password

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -180,7 +180,7 @@ class CallbackController
 		{
 			$hash = spl_object_hash($callback);
 
-			return sha1($hash . serialize([$args]));
+			return hash('sha1', $hash . serialize([$args]));
 		}
 
 		if (\is_array($callback) && \is_object($callback[0]))
@@ -190,6 +190,6 @@ class CallbackController
 			$callback[0] = $vars;
 		}
 
-		return md5(serialize([$callback, $args]));
+		return hash('md5', serialize([$callback, $args]));
 	}
 }

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -24,6 +24,14 @@ $router = $this->getContainer()->router;
                     data-bs-toggle="tab" role="tab"
                     data-bs-target="#sysconfigTabSystemContent" aria-controls="sysconfigTabSystemContent">
                 @lang('PANOPTICON_SYSCONFIG_LBL_TAB_SYSTEM')
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button type="button" id="sysconfigTabSecurity"
+                    class="nav-link" aria-selected="true"
+                    data-bs-toggle="tab" role="tab"
+                    data-bs-target="#sysconfigTabSecurityContent" aria-controls="sysconfigTabSecurityContent">
+                @lang('PANOPTICON_SYSCONFIG_LBL_TAB_SECURITY')
             </button>
         </li>
         <li class="nav-item" role="presentation">
@@ -57,11 +65,21 @@ $router = $this->getContainer()->router;
         >
             <div class="d-flex flex-column gap-3">
                 @include('Sysconfig/default_system')
+                @include('Sysconfig/default_session')
                 @include('Sysconfig/default_caching')
                 @include('Sysconfig/default_logging')
                 @include('Sysconfig/default_proxy')
                 @include('Sysconfig/default_dbtools')
                 @include('Sysconfig/default_database')
+            </div>
+        </div>
+        <div class="tab-pane"
+             id="sysconfigTabSecurityContent" role="tabpanel" aria-labelledby="sysconfigTabSecurity" tabindex="-1"
+        >
+            <div class="d-flex flex-column gap-3">
+                @include('Sysconfig/default_passkey')
+                @include('Sysconfig/default_passwordsec')
+                @include('Sysconfig/default_loginfail')
             </div>
         </div>
         <div class="tab-pane"
@@ -83,6 +101,7 @@ $router = $this->getContainer()->router;
         >
             <div class="d-flex flex-column gap-3">
                 @include('Sysconfig/default_automation')
+                @include('Sysconfig/default_uptime')
                 @include('Sysconfig/default_sites')
                 @include('Sysconfig/default_coreupdates')
                 @include('Sysconfig/default_extupdates')

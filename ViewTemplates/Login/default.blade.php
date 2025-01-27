@@ -1,20 +1,24 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
 defined('AKEEBA') || die;
 
+use Akeeba\Panopticon\Factory;
 use Awf\Text\Text;
+use Awf\Utils\Template;
 
 // Used for type hinting
-/** @var  \Akeeba\Panopticon\View\Login\Html  $this */
+/** @var  \Akeeba\Panopticon\View\Login\Html $this */
 
 $css = <<< CSS
 svg.panopticonLogoColour {height: 6em;margin-bottom: 1em;}
 CSS;
+
+$canPWReset = Factory::getContainer()->appConfig->get('pwreset', true);
 
 ?>
 @inlinecss($css)
@@ -24,7 +28,7 @@ CSS;
       method="POST" id="loginForm">
 
     <header class="mb-4 text-center">
-	    {{ file_get_contents(APATH_MEDIA . '/images/logo_colour.svg') }}
+        {{ file_get_contents(APATH_MEDIA . '/images/logo_colour.svg') }}
         <h3 class="h2 text-center text-primary-emphasis">
             @lang('PANOPTICON_LOGIN_LBL_PLEASELOGIN')
         </h3>
@@ -45,35 +49,60 @@ CSS;
             <label for="password">@lang('PANOPTICON_LOGIN_LBL_PASSWORD')</label>
         </div>
 
-        <button type="submit" class="w-100 btn btn-primary btn-lg"
-                id="btnLoginSubmit">
-            <span class="fa fa-user-check me-1" aria-hidden="true"></span>
-            @lang('PANOPTICON_LOGIN_LBL_LOGIN')
-        </button>
+        <div class="d-flex flex-row gap-3">
+            <button type="submit" class="w-100 btn btn-primary btn-lg"
+                    id="btnLoginSubmit">
+                <span class="fa fa-user-check me-1" aria-hidden="true"></span>
+                @lang('PANOPTICON_LOGIN_LBL_LOGIN')
+            </button>
 
-        <div class="mt-4 mb-1 d-flex flex-row justify-content-end">
-            <label for="language" class="visually-hidden">
-                @lang('PANOPTICON_LOGIN_LBL_LANGUAGE')
-            </label>
-            {{ $this->getContainer()->helper->setup->languageOptions(
-                $this->getContainer()->segment->get('panopticon.forced_language', ''),
-                name: 'language',
-                id: 'language',
-                attribs: ['class' => 'form-select', 'style' => 'width: min(19em, 100%)'],
-                addUseDefault: true,
-                namesAlsoInEnglish: false
-            ) }}
+            @if($this->hasPasskeys)
+                <button type="button"
+                        class="w-100 btn btn-secondary btn-lg border-primary border-2 passkey_login_button"
+                        id="btnPasskeyLogin">
+                    {{ @file_get_contents(Template::parsePath('media://images/passkey-white.svg', true, $this->getContainer()->application)) }}
+                    <span class="ms-1">
+                    @lang('PANOPTICON_PASSKEYS_BTN_LOGIN')
+                </span>
+                </button>
+            @endif
+        </div>
+
+        <div class="mt-4 mb-1 d-flex flex-row {{ $canPWReset ? '' : 'justify-content-end' }}">
+            @if ($canPWReset)
+            <div class="flex-grow-1">
+                <a href="@route('index.php?view=users&task=pwreset')"
+                   class="btn btn-link text-decoration-none"
+                >@lang('PANOPTICON_USERS_LBL_PWRESET_PROMPT')</a>
+            </div>
+            @endif
+
+            <div>
+                <label for="language" class="visually-hidden">
+                    @lang('PANOPTICON_LOGIN_LBL_LANGUAGE')
+                </label>
+                {{ $this->getContainer()->helper->setup->languageOptions(
+                    $this->getContainer()->segment->get('panopticon.forced_language', ''),
+                    name: 'language',
+                    id: 'language',
+                    attribs: ['class' => 'form-select', 'style' => 'width: min(19em, 100%)'],
+                    addUseDefault: true,
+                    namesAlsoInEnglish: false
+                ) }}
+            </div>
         </div>
 
         <input type="hidden" name="token" value="@token()">
-        <input type="hidden" name="return" value="<?= empty($this->returnUrl) ? '' : base64_encode($this->returnUrl) ?>">
+        <input type="hidden" name="return"
+               value="<?= empty($this->returnUrl) ? '' : base64_encode($this->returnUrl) ?>">
     </div>
 </form>
 
 @if ($this->autologin)
-<script type="text/javascript">
-    window.addEventListener('DOMContentLoaded', () => {
-        document.getElementById('loginForm').submit();
-    });
-</script>
+    <script type="text/javascript">
+        window.addEventListener('DOMContentLoaded', () =>
+        {
+            document.getElementById('loginForm').submit();
+        });
+    </script>
 @endif

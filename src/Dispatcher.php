@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -58,11 +58,31 @@ class Dispatcher extends AWFDispatcher
 
 	public function onBeforeDispatch(): bool
 	{
+		$results = $this->getContainer()->eventDispatcher->trigger('onBeforeDispatch');
+
+		if (in_array(false, $results, true))
+		{
+			return false;
+		}
+
 		$this->loadCommonCSS();
 		$this->loadCommonJavaScript();
 
 		return true;
 	}
+
+	public function onAfterDispatch()
+	{
+		$results = $this->getContainer()->eventDispatcher->trigger('onAfterDispatch');
+
+		if (in_array(false, $results, true))
+		{
+			return false;
+		}
+
+		return true;
+	}
+
 
 	private function loadCommonJavaScript(): void
 	{
@@ -79,7 +99,7 @@ class Dispatcher extends AWFDispatcher
 		$themeFile = (new Filter())->clean($themeFile, 'path');
 		$themeFile .= '.min.css';
 
-		if (!@file_exists(Template::parsePath('media://css/' . $themeFile, false, $this->getContainer()->application)))
+		if (!@file_exists(Template::parsePath('media://css/' . $themeFile, true, $this->getContainer()->application)))
 		{
 			$themeFile = 'theme.min.css';
 		}

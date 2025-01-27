@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,8 +9,10 @@ namespace Akeeba\Panopticon\Task;
 
 defined('AKEEBA') || die;
 
+use Akeeba\Panopticon\Exception\CoreUpdate\NonEmailedRuntimeException;
 use Akeeba\Panopticon\Helper\LanguageListTrait;
 use Akeeba\Panopticon\Library\Aes\Ctr;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Task\AbstractCallback;
 use Akeeba\Panopticon\Library\Task\Attribute\AsTask;
 use Akeeba\Panopticon\Library\Task\Status;
@@ -50,8 +52,15 @@ class JoomlaUpdate extends AbstractCallback
 		$site               = $this->getSite($task);
 		$config             = $site->getConfig();
 
+		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
+
 		try
 		{
+			if ($site->cmsType() !== CMSType::JOOMLA)
+			{
+				throw new RuntimeException('This is not a Joomla site!');
+			}
+
 			switch ($this->currentState)
 			{
 				case 'init':
@@ -92,8 +101,6 @@ class JoomlaUpdate extends AbstractCallback
 					break;
 
 				case 'siteInfo':
-					$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
-
 					// I have to wrap this in a transaction for saving the new information to work.
 					$this->container->db->transactionStart();
 					$this->runSiteInfo($task, $storage);
@@ -106,6 +113,9 @@ class JoomlaUpdate extends AbstractCallback
 
 				case 'email':
 					$this->sendSuccessEmail($task, $storage);
+					break;
+
+				case 'finish':
 					break;
 			}
 		}
@@ -150,19 +160,15 @@ class JoomlaUpdate extends AbstractCallback
 					]
 				);
 			}
-			catch (Throwable $e)
+			catch (Throwable)
 			{
 				// Ignore this
 			}
 
 			// Send email about the failed update
-			if ($storage->get('email_error', true))
+			if ($storage->get('email_error', true) && !$e instanceof NonEmailedRuntimeException)
 			{
-				$this->sendEmail(
-					'joomlaupdate_failed', $storage, ['panopticon.super', 'panopticon.manage'], [
-						'MESSAGE' => $e->getMessage(),
-					]
-				);
+				$this->sendFailureEmail($task, $storage, $e);
 			}
 
 			// Rethrow the exception so that the task gets the "knocked out" state
@@ -289,7 +295,7 @@ class JoomlaUpdate extends AbstractCallback
 	 */
 	protected function runEvent(string $event, object $task, Registry $storage): bool
 	{
-		$results = $this->container->eventDispatcher->trigger('onTaskBeforeJoomlaUpdate', [$task, $storage]);
+		$results = $this->container->eventDispatcher->trigger($event, [$task, $storage]);
 
 		// No handlers executed. We are done!
 		if (empty($results))
@@ -322,14 +328,13 @@ class JoomlaUpdate extends AbstractCallback
 	private function runInit(object $task, Registry $storage): void
 	{
 		// Initialise the email variables
-		$storage->set(
-			'email_variables', [
-				'NEW_VERSION' => $this->getLanguage()->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_VERSION'),
-				'OLD_VERSION' => $this->getLanguage()->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_VERSION'),
-				'SITE_NAME'   => $this->getLanguage()->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_SITE'),
-				'SITE_URL'    => 'https://www.example.com',
-			]
-		);
+		$emailVariables = [
+			'NEW_VERSION' => $this->getLanguage()->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_VERSION'),
+			'OLD_VERSION' => $this->getLanguage()->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_VERSION'),
+			'SITE_NAME'   => $this->getLanguage()->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_SITE'),
+			'SITE_URL'    => 'https://www.example.com',
+		];
+		$storage->set('email_variables', $emailVariables);
 
 		// Remember when we started installing the update
 		$storage->set('start_timestamp', time());
@@ -337,12 +342,22 @@ class JoomlaUpdate extends AbstractCallback
 		// Try to get the site
 		$site = $this->getSite($task);
 
+		$emailVariables = array_merge(
+			$emailVariables,
+			[
+				'SITE_NAME'   => $site->name,
+				'SITE_URL'    => $site->getBaseUrl(),
+			]
+		);
+		$storage->set('email_variables', $emailVariables);
+		$storage->set('site_id', $site->id);
+
 		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
 
 		// Is the site enabled?
 		if (!$site->enabled)
 		{
-			throw new RuntimeException(
+			throw new NonEmailedRuntimeException(
 				$this->getLanguage()->sprintf('PANOPTICON_TASK_JOOMLAUPDATE_ERR_SITE_DISABLED', $task->site_id)
 			);
 		}
@@ -376,19 +391,32 @@ class JoomlaUpdate extends AbstractCallback
 		$storage->set('oldVersion', $currentVersion);
 		$storage->set('newVersion', $latestVersion);
 
+		$emailVariables = array_merge(
+			$emailVariables,
+			[
+				'NEW_VERSION' => $latestVersion,
+				'OLD_VERSION' => $currentVersion,
+			]
+		);
+		$storage->set('email_variables', $emailVariables);
+		$storage->set('email_cc', $this->getSiteNotificationEmails($config));
+		$storage->set('email_after', (bool) ($config?->config?->core_update?->email_after ?? true));
+		$storage->set('email_error', (bool) ($config?->config?->core_update?->email_error ?? true));
+
 		if (
 			!$force && !empty($currentVersion) && !empty($latestVersion)
 			&& version_compare($currentVersion, $latestVersion, 'ge')
 		)
 		{
-			throw new RuntimeException(
+			throw new NonEmailedRuntimeException(
 				$this->getLanguage()->sprintf(
 					'PANOPTICON_TASK_JOOMLAUPDATE_ERR_NO_UPDATE_AVAILABLE', $site->id,
 					$site->name, $currentVersion, $latestVersion
 				)
 			);
 		}
-		elseif (!empty($currentVersion) && !empty($latestVersion))
+
+		if (!empty($currentVersion) && !empty($latestVersion))
 		{
 			$this->logger->info(
 				$this->getLanguage()->sprintf(
@@ -400,24 +428,16 @@ class JoomlaUpdate extends AbstractCallback
 				)
 			);
 		}
-
-		$storage->set(
-			'email_variables', [
-				'NEW_VERSION' => $latestVersion,
-				'OLD_VERSION' => $currentVersion,
-				'SITE_NAME'   => $site->name,
-				'SITE_URL'    => $site->getBaseUrl(),
-			]
-		);
-		$storage->set('site_id', $site->id);
-
-		$cc = $this->getSiteNotificationEmails($config);
-
-		$storage->set('email_cc', $cc);
-
-		$storage->set('email_after', (bool) ($config?->config?->core_update?->email_after ?? true));
-		$storage->set('email_error', (bool) ($config?->config?->core_update?->email_error ?? true));
-
+		else
+		{
+			throw new NonEmailedRuntimeException(
+				sprintf(
+					'The current or latest version is missing on site #%d (%s). Is the site already updated?',
+					$site->id,
+					$site->name,
+				)
+			);
+		}
 
 		// Finally, advance the state
 		$this->advanceState();
@@ -469,8 +489,6 @@ class JoomlaUpdate extends AbstractCallback
 	{
 		$site = $this->getSite($task);
 
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
-
 		// Retrieve information from the storage
 		$mode = $storage->get('update.mode', 'chunk');
 
@@ -480,8 +498,23 @@ class JoomlaUpdate extends AbstractCallback
 		{
 			case 'chunk':
 			default:
+				// Get values from the storage
+				$url         = $storage->get('update.package_url', null);
+				$size        = $storage->get('update.size', null);
+				$offset      = $storage->get('update.offset', null);
+				$chunk_index = $storage->get('update.chunk_index', null);
+				$max_time    = $storage->get('update.max_time', null);
+
+				// Sanitise values
+				$url         = empty($url) ? null : (filter_var($url, FILTER_SANITIZE_URL) ?: null);
+				$size        = $size >= 0 ? $size : null;
+				$offset      = $offset >= 0 ? $offset : null;
+				$chunk_index = $chunk_index >= 0 ? $chunk_index : null;
+				$max_time    = $max_time >= 0 ? $max_time : null;
+
 				$offsetInt = (int) ($offset ?? -1);
 				$offsetInt = $offsetInt <= 0 ? 0 : $offset;
+
 				$this->logger->info(
 					$offsetInt <= 0
 						? $this->getLanguage()->sprintf(
@@ -516,43 +549,29 @@ class JoomlaUpdate extends AbstractCallback
 				}
 
 				// Then, download the update
-				// Get values from the storage
-				$url         = $storage->get('update.package_url', null);
-				$size        = $storage->get('update.size', null);
-				$offset      = $storage->get('update.offset', null);
-				$chunk_index = $storage->get('update.chunk_index', null);
-				$max_time    = $storage->get('update.max_time', null);
-
-				// Sanitise values
-				$url         = empty($url) ? null : (filter_var($url, FILTER_SANITIZE_URL) ?: null);
-				$size        = $size >= 0 ? $size : null;
-				$offset      = $offset >= 0 ? $offset : null;
-				$chunk_index = $chunk_index >= 0 ? $chunk_index : null;
-				$max_time    = $max_time >= 0 ? $max_time : null;
-
 				$postData = [];
 
-				if ($url !== null)
+				if (!empty($url))
 				{
 					$postData['url'] = $url;
 				}
 
-				if ($size !== null)
+				if (!empty($size))
 				{
 					$postData['size'] = $size;
 				}
 
-				if ($offset !== null)
+				if (!empty($offset))
 				{
 					$postData['offset'] = $offset;
 				}
 
-				if ($chunk_index !== null)
+				if (!empty($chunk_index))
 				{
 					$postData['chunk_index'] = $chunk_index;
 				}
 
-				if ($max_time !== null)
+				if (!empty($max_time))
 				{
 					$postData['max_time'] = $max_time;
 				}
@@ -608,7 +627,7 @@ class JoomlaUpdate extends AbstractCallback
 							$site->id,
 							$site->name
 						),
-						[json_encode($raw)]
+						[empty($raw) ? $json : $raw]
 					);
 
 					$storage->set('update.mode', 'single');
@@ -643,13 +662,21 @@ class JoomlaUpdate extends AbstractCallback
 
 				if ($done)
 				{
+					$this->logger->debug('Done with the download');
+
 					$this->advanceState();
 				}
+
+				$this->logger->debug('Will continue download in the next step');
 
 				break;
 
 			case 'single':
+				$this->logger->info('Downloading the update (single part)');
+
 				$this->doSinglePartDownload($site, $storage);
+
+				$this->logger->info('Downloaded the update (single part)');
 
 				$this->advanceState();
 				break;
@@ -667,8 +694,6 @@ class JoomlaUpdate extends AbstractCallback
 	private function runBeforeEvents(object $task, Registry $storage): void
 	{
 		$site = $this->getSite($task);
-
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
 
 		$this->logger->info(
 			$this->getLanguage()->sprintf(
@@ -703,8 +728,6 @@ class JoomlaUpdate extends AbstractCallback
 	private function runBackup(object $task, Registry $storage): void
 	{
 		$site = $this->getSite($task);
-
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
 
 		// Collect configuration and task process information
 		$config         = $site->getConfig();
@@ -835,8 +858,6 @@ class JoomlaUpdate extends AbstractCallback
 	{
 		$site = $this->getSite($task);
 
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
-
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
 
 		$this->logger->info(
@@ -911,8 +932,6 @@ class JoomlaUpdate extends AbstractCallback
 	private function runExtract(object $task, Registry $storage): void
 	{
 		$site = $this->getSite($task);
-
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
 
 		$step = $storage->get('restore.step', 'start');
 		$url  = $this->getExtractUrl($site);
@@ -1281,7 +1300,7 @@ class JoomlaUpdate extends AbstractCallback
 		// Prepare the POST data
 		$postData                = (array) $data;
 		$postData['password']    = $storage->get('update.password', '');
-		$postData['_randomJunk'] = sha1(random_bytes(32));
+		$postData['_randomJunk'] = hash('sha1', random_bytes(32));
 
 		// Prepare the client options
 		$client                                         = $this->container->httpFactory->makeClient(cache: false);
@@ -1299,6 +1318,8 @@ class JoomlaUpdate extends AbstractCallback
 			$options[RequestOptions::AUTH] = [$username, $password];
 		}
 
+		$options[RequestOptions::HTTP_ERRORS] = false;
+
 		// Send the request
 		$response = $client
 			->post(
@@ -1308,6 +1329,16 @@ class JoomlaUpdate extends AbstractCallback
 					]
 				)
 			);
+
+		// Special case: HTTP 401 means that the user failed to provide the administrator folder username and password.
+		if ($response->getStatusCode() === 401)
+		{
+			throw new RuntimeException(
+				$this->getLanguage()->text(
+					'PANOPTICON_TASK_JOOMLAUPDATE_ERR_HTTP_401',
+				)
+			);
+		}
 
 		// We must always get HTTP 200
 		if ($response->getStatusCode() !== 200)
@@ -1446,8 +1477,6 @@ class JoomlaUpdate extends AbstractCallback
 	{
 		$site = $this->getSite($task);
 
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
-
 		$url = $this->getExtractUrl($site);
 
 		$this->logger->info(
@@ -1543,8 +1572,6 @@ class JoomlaUpdate extends AbstractCallback
 	{
 		$site = $this->getSite($task);
 
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
-
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
 
 		$this->logger->info(
@@ -1582,8 +1609,6 @@ class JoomlaUpdate extends AbstractCallback
 	private function runReloadUpdates(object $task, Registry $storage): void
 	{
 		$site = $this->getSite($task);
-
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
 
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
 
@@ -1654,8 +1679,6 @@ class JoomlaUpdate extends AbstractCallback
 	private function runAfterEvents(object $task, Registry $storage): void
 	{
 		$site = $this->getSite($task);
-
-		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
 
 		$this->logger->info(
 			$this->getLanguage()->sprintf(
@@ -1789,10 +1812,6 @@ class JoomlaUpdate extends AbstractCallback
 	 */
 	private function sendSuccessEmail(object $task, Registry $storage): void
 	{
-		$this->logger->pushLogger(
-			$this->container->loggerFactory->get($this->name . '.' . $this->getSite($task)->id)
-		);
-
 		// Ensure there are not stray transactions
 		try
 		{
@@ -1854,4 +1873,73 @@ class JoomlaUpdate extends AbstractCallback
 
 		$this->advanceState();
 	}
+
+	/**
+	 * Sends a failure email
+	 *
+	 * @param   object     $task
+	 * @param   Registry   $storage
+	 * @param   Throwable  $e
+	 *
+	 * @return  void
+	 * @since   1.2.0 Moved into its own method
+	 */
+	private function sendFailureEmail(object $task, Registry $storage, Throwable $e): void
+	{
+		// Ensure there are not stray transactions
+		try
+		{
+			$this->container->db->transactionCommit();
+		}
+		catch (Exception)
+		{
+			// Okay...
+		}
+
+		// Get the start time, end time, and actual duration
+		$startTime = $storage->get('start_timestamp', null);
+		$endTime   = $startTime === null ? null : time();
+
+		/**
+		 * Only send emails if we didn't reinstall the same version AND if we are asked to send emails after
+		 * Joomla! update.
+		 */
+		$vars       = $storage->get('email_variables', []);
+		$vars       = (array) $vars;
+		$newVersion = $vars['NEW_VERSION'] ?? null;
+		$oldVersion = $vars['OLD_VERSION'] ?? null;
+
+		$perLanguageVariables = [];
+		foreach ($this->getAllKnownLanguages() as $lang)
+		{
+			$langObject = $this->getContainer()->languageFactory($lang);
+
+			if ($startTime === null)
+			{
+				$perLanguageVariables[$lang] = [
+					'START_TIME' => $langObject->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_TIME'),
+					'END_TIME'   => $langObject->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_TIME'),
+					'DURATION'   => $langObject->text('PANOPTICON_TASK_JOOMLAUPDATE_LBL_UNKNOWN_DURATION'),
+				];
+			}
+			else
+			{
+				$basicHtmlHelper = $this->container->html->basic;
+
+				$perLanguageVariables[$lang] = [
+					'START_TIME' => $basicHtmlHelper->date('@' . $startTime, $langObject->text('DATE_FORMAT_LC7')),
+					'END_TIME'   => $basicHtmlHelper->date('@' . $endTime, $langObject->text('DATE_FORMAT_LC7')),
+					'DURATION'   => $this->timeAgo($startTime, $endTime, languageObject: $langObject),
+				];
+			}
+		}
+
+		$storage->set('email_variables_by_lang', $perLanguageVariables);
+
+		$this->sendEmail('joomlaupdate_failed', $storage, ['panopticon.super', 'panopticon.manage'], [
+				'MESSAGE' => $e->getMessage(),
+			]
+		);
+	}
+
 }

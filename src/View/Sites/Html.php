@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,6 +11,7 @@ defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Enumerations\JoomlaUpdateRunState;
+use Akeeba\Panopticon\Library\Enumerations\WordPressUpdateRunState;
 use Akeeba\Panopticon\Library\Toolbar\DropdownButton;
 use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Model\Sysconfig;
@@ -147,6 +148,14 @@ class Html extends DataViewHtml
 	protected JoomlaUpdateRunState $joomlaUpdateRunState;
 
 	/**
+	 * The state of whether the WordPress update task is running or not.
+	 *
+	 * @var   JoomlaUpdateRunState
+	 * @since 1.2.0
+	 */
+	protected WordPressUpdateRunState $wpUpdateRunState;
+
+	/**
 	 * Holds an array of extensions installed on the site.
 	 *
 	 * @var   array
@@ -154,13 +163,13 @@ class Html extends DataViewHtml
 	 */
 	protected array $extensions;
 
-	private ?string $curlError = null;
+	protected ?string $curlError = null;
 
-	private ?string $guzzleError = null;
+	protected ?string $guzzleError = null;
 
-	private ?int $httpCode;
+	protected ?int $httpCode;
 
-	private array $backupProfiles = [];
+	protected array $backupProfiles = [];
 
 	public function onBeforeConnectionDoctor(): bool
 	{
@@ -212,7 +221,7 @@ class Html extends DataViewHtml
 		$result = $this->onBeforeBrowseCrud();
 
 		// Groups map
-		$this->groupMap = $this->getModel('groups')->getGroupMap();
+		$this->groupMap = $this->getModel('groups')->getGroupMap(false);
 
 		$user      = $this->container->userManager->getUser();
 		$canAdd    = $user->getPrivilege('panopticon.admin') || $user->getPrivilege('panopticon.addown');
@@ -222,6 +231,7 @@ class Html extends DataViewHtml
 		$buttons[] = $canAdd ? 'add' : null;
 		$buttons[] = $canEdit ? 'edit' : null;
 		$buttons[] = $canDelete ? 'delete' : null;
+        $buttons[] = $canEdit ? 'batch' : null;
 
 		$this->container->application->getDocument()->getToolbar()->clearButtons();
 		$this->addButtons($buttons);
@@ -247,7 +257,7 @@ class Html extends DataViewHtml
 		{
 			$profiles = [];
 		}
-		$ret      = [];
+		$ret = [];
 
 		foreach ($profiles as $profile)
 		{
@@ -361,18 +371,30 @@ class Html extends DataViewHtml
 		$this->setTitle($this->getLanguage()->text('PANOPTICON_SITES_TITLE_READ'));
 
 		/** @noinspection PhpFieldAssignmentTypeMismatchInspection */
-		$this->item                = $this->getModel();
-		$this->canEdit             = $this->item->canEdit();
-		$this->siteConfig          = $this->item->getConfig();
-		$this->connectorVersion    = $this->siteConfig->get('core.panopticon.version');
-		$this->connectorAPI        = $this->siteConfig->get('core.panopticon.api');
-		$this->baseUri             = Uri::getInstance($this->item->getBaseUrl());
-		$this->adminUri            = Uri::getInstance($this->item->getAdminUrl());
-		$this->extensions          = $this->item->getExtensionsList();
+		$this->item             = $this->getModel();
+		$this->canEdit          = $this->item->canEdit();
+		$this->siteConfig       = $this->item->getConfig();
+		$this->connectorVersion = $this->siteConfig->get('core.panopticon.version');
+		$this->connectorAPI     = $this->siteConfig->get('core.panopticon.api');
+		$this->baseUri          = Uri::getInstance($this->item->getBaseUrl());
+		$this->adminUri         = Uri::getInstance($this->item->getAdminUrl());
+		$this->extensions       = $this->item->getExtensionsList();
 
 		if ($this->item->cmsType() === CMSType::JOOMLA)
 		{
 			$this->joomlaUpdateRunState = $this->item->getJoomlaUpdateRunState();
+		}
+		elseif ($this->item->cmsType() === CMSType::WORDPRESS)
+		{
+			$this->wpUpdateRunState = $this->item->getWordPressUpdateRunState();
+		}
+
+		// Modify extensionFilters for WordPress sites
+		if ($this->item->cmsType() === CMSType::WORDPRESS)
+		{
+			unset($this->extensionFilters['filter-dlid']);
+			unset($this->extensionFilters['filter-naughty']);
+			unset($this->extensionFilters['filter-updatesite']);
 		}
 
 		try
@@ -439,18 +461,18 @@ class Html extends DataViewHtml
 				]
 			)
 		)
-//			->addButton(
-//				new Button(
-//					[
-//						'id'    => 'actionsummarytasks',
-//						'icon'  => 'fa fa-fw fa-envelope-open-text',
-//						'title' => 'Scheduled Action Summary',
-//						'url'   => $router->route(
-//							sprintf("index.php?view=actionsummarytasks&site_id=%s", $this->item->getId())
-//						),
-//					]
-//				)
-//			)
+			->addButton(
+				new Button(
+					[
+						'id'    => 'actionsummarytasks',
+						'icon'  => 'fa fa-fw fa-envelope',
+						'title' => $this->getContainer()->language->text('PANOPTICON_ACTIONSUMMARYTASKS_TITLE'),
+						'url'   => $router->route(
+							sprintf("index.php?view=actionsummarytasks&site_id=%s", $this->item->getId())
+						),
+					]
+				)
+			)
 			->addButton(
 				new Button(
 					[
@@ -469,7 +491,7 @@ class Html extends DataViewHtml
 					[
 						'id'    => 'backuptasks',
 						'icon'  => 'fa fa-fw fa-hard-drive',
-						'title' => $this->getContainer()->language->text('PANOPTICON_SITES_LBL_AKEEBABACKUP_SCHEDULE'),
+						'title' => $this->getContainer()->language->text('PANOPTICON_SITES_MENU_AKEEBABACKUP_SCHEDULE'),
 						'url'   => $router->route(
 							sprintf("index.php?view=backuptasks&site_id=%s&manual=0", $this->item->getId())
 						),
@@ -485,7 +507,7 @@ class Html extends DataViewHtml
 					[
 						'id'    => 'scannertasks',
 						'icon'  => 'fa fa-fw fa-shield-halved',
-						'title' => $this->getContainer()->language->text('PANOPTICON_SITES_LBL_ADMINTOOLS_SCHEDULE'),
+						'title' => $this->getContainer()->language->text('PANOPTICON_SITES_MENU_ADMINTOOLS_SCHEDULE'),
 						'url'   => $router->route(
 							sprintf("index.php?view=scannertasks&site_id=%s&manual=0", $this->item->getId())
 						),
@@ -498,17 +520,62 @@ class Html extends DataViewHtml
 
 		if ($this->canEdit)
 		{
-			$this->addButtonFromDefinition(
+			$troubleshootDropdown = (new DropdownButton(
 				[
-					'id'    => 'doctor',
-					'title' => $this->getLanguage()->text('PANOPTICON_SITES_LBL_CONNECTION_DOCTOR_TITLE'),
-					'class' => 'btn btn-secondary border-light',
-					'url'   => $router->route(
-						sprintf("index.php?view=site&task=connectionDoctor&id=%s", $this->item->getId())
-					),
-					'icon'  => 'fa fa-fw fa-stethoscope',
+					'id'    => 'dropdown-troubleshoot',
+					'icon'  => 'fa fa-fw fa-kit-medical',
+					'title' => $this->getContainer()->language->text('PANOPTICON_SITES_LBL_DROPDOWN_TROUBLESHOOT'),
+					'class' => 'btn btn-outline-warning ms-2',
 				]
+			))->addButton(
+				new Button(
+					[
+						'id'    => 'doctor',
+						'icon'  => 'fa fa-fw fa-stethoscope',
+						'title' => $this->getLanguage()->text('PANOPTICON_SITES_LBL_CONNECTION_DOCTOR_TITLE'),
+						'url'   => $router->route(
+							sprintf("index.php?view=site&task=connectionDoctor&id=%s", $this->item->getId())
+						),
+					]
+				)
 			);
+
+			if ($this->getContainer()->userManager->getUser()->getPrivilege('panopticon.super', false))
+			{
+				$troubleshootDropdown->addButton(
+					new Button(
+						[
+							'id'    => 'troubleshooting-divider-01',
+							'title' => '---',
+							'url'   => null,
+						]
+					)
+				)->addButton(
+					new Button(
+						[
+							'id'    => 'tasks',
+							'icon'  => 'fa fa-fw fa-list-check',
+							'title' => $this->getLanguage()->text('PANOPTICON_TASKS_TITLE'),
+							'url'   => $router->route(
+								sprintf("index.php?view=tasks&site_id=%s", $this->item->getId())
+							),
+						]
+					)
+				)->addButton(
+					new Button(
+						[
+							'id'    => 'logs',
+							'icon'  => 'fa fa-fw fa-file-lines',
+							'title' => $this->getLanguage()->text('PANOPTICON_LOGS_TITLE'),
+							'url'   => $router->route(
+								sprintf("index.php?view=log&site_id=%s", $this->item->getId())
+							),
+						]
+					)
+				);
+			}
+
+			$this->container->application->getDocument()->getToolbar()->addButton($troubleshootDropdown);
 		}
 
 		$this->cronStuckTime = $this->getCronStuckTime();
@@ -569,7 +636,11 @@ class Html extends DataViewHtml
 			}
 		}
 
-		if ($date instanceof DateTime)
+		if ($date instanceof Date)
+		{
+			$date = $date->toAtom();
+		}
+		elseif ($date instanceof DateTime)
 		{
 			$date = $date->format(DATE_ATOM);
 		}
@@ -697,7 +768,7 @@ class Html extends DataViewHtml
 			$startTime->setTimezone($tz);
 		}
 
-		$timeZoneSuffix = $startTime->format('T', true);
+		$timeZoneSuffix = $startTime->format('T', true, false);
 
 		return [
 			is_null($startTime) ? '&nbsp;' : $startTime->format($this->getLanguage()->text('DATE_FORMAT_LC6'), true),

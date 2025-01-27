@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -93,6 +93,14 @@ trait DefaultConfigurationTrait
 			'smtpauth'                 => false,
 			'smtpuser'                 => '',
 			'smtppass'                 => '',
+			'session_save_levels'      => 0,
+			'session_encrypt'          => true,
+			'session_use_default_path' => true,
+			'login_failure_enable'     => true,
+			'login_max_failures'       => 5,
+			'login_failure_window'     => 60,
+			'login_lockout'            => 900,
+			'login_lockout_extend'     => false,
 		];
 	}
 
@@ -100,7 +108,10 @@ trait DefaultConfigurationTrait
 	{
 		$values = match ($key)
 		{
-			'finished_setup', 'debug', 'behind_load_balancer', 'stats_collection', 'proxy_enabled', 'phpwarnings', 'log_rotate_compress', 'dbencryption', 'dbsslverifyservercert', 'dbbackup_auto', 'dbbackup_compress', 'mail_online', 'mail_inline_images', 'smtpauth' => [
+			'finished_setup', 'debug', 'behind_load_balancer', 'stats_collection', 'proxy_enabled', 'phpwarnings',
+			'log_rotate_compress', 'dbencryption', 'dbsslverifyservercert', 'dbbackup_auto', 'dbbackup_compress',
+			'mail_online', 'mail_inline_images', 'smtpauth', 'session_encrypt', 'login_lockout_extend',
+			'login_failure_enable', 'session_use_default_path' => [
 				'true',
 				'yes',
 				'1',
@@ -141,11 +152,15 @@ trait DefaultConfigurationTrait
 	{
 		return match ($key)
 		{
-			'finished_setup', 'debug', 'behind_load_balancer', 'stats_collection', 'proxy_enabled', 'phpwarnings', 'log_rotate_compress', 'dbencryption', 'dbsslverifyservercert', 'dbbackup_auto', 'dbbackup_compress', 'mail_online', 'mail_inline_images', 'smtpauth' => [
-				$this,
-				'validateBool',
-			],
+			'finished_setup', 'debug', 'behind_load_balancer', 'stats_collection', 'proxy_enabled', 'phpwarnings',
+			'log_rotate_compress', 'dbencryption', 'dbsslverifyservercert', 'dbbackup_auto', 'dbbackup_compress',
+			'mail_online', 'mail_inline_images', 'smtpauth', 'session_encrypt', 'login_lockout_extend',
+			'login_failure_enable', 'session_use_default_path'
+			=> [$this, 'validateBool'],
 			'session_timeout' => fn($x) => $this->validateInteger($x, 1440, 3, 535600),
+			'session_save_levels' => fn($x) => $this->validateInteger($x, 0, 0, 5),
+			'login_max_failures' => fn($x) => $this->validateInteger($x, 5, 1, PHP_INT_MAX),
+			'login_failure_window', 'login_lockout' => fn($x) => $this->validateInteger($x, 60, 1, PHP_INT_MAX),
 			'log_level' => fn($x) => $this->validatePresetValues(
 				$x, LogLevel::WARNING, [
 					LogLevel::DEBUG,

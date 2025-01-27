@@ -1,6 +1,6 @@
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2023 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -201,12 +201,11 @@ akeeba.MFA.webauthn.onValidateClick = function (event)
     return false;
 }
 
-document.getElementById("passkeys-missing").style.display = "none";
+document.getElementById("passkeys-missing").classList.add("d-none");
 
-if (typeof (navigator.credentials) == "undefined")
-{
-    document.getElementById("passkeys-missing").style.display  = "block";
-    document.getElementById("passkeys-controls").style.display = "none";
+if (typeof (navigator.credentials) == "undefined") {
+    document.getElementById("passkeys-missing").classList.replace("d-none", "d-block");
+    document.getElementById("passkeys-controls").classList.add("d-none");
     document.getElementById("passkeys_button").style.disabled = "disabled";
 }
 

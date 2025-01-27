@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -12,7 +12,6 @@ defined('AKEEBA') || die;
 use Akeeba\Panopticon\Factory;
 use Awf\Database\Driver;
 use Awf\Helper\AbstractHelper;
-use Awf\Text\Text;
 use Awf\Utils\ParseIni;
 use DateTimeZone;
 use DirectoryIterator;
@@ -20,6 +19,25 @@ use JsonException;
 
 class Setup extends AbstractHelper
 {
+	public function cssThemeSelect(string $selected = '', string $name = 'options[theme]', string $id = 'theme')
+	{
+		$files   = $this->getThemeCSSFiles();
+		$options = [];
+
+		foreach ($files as $file)
+		{
+			$options[$file] = ($file !== 'theme') ? $file : ($file . ' ' . $this->getContainer()->language->text('PANOPTICON_SYSCONFIG_LBL_FIELD_THEME_DEFAULT'));
+		}
+
+		return $this->getContainer()->html->select->genericList(
+			data: $options,
+			name: $name,
+			attribs: ['class' => 'form-select'],
+			selected: $selected, idTag: $id ?: $name,
+			translate: false
+		);
+	}
+
 	public function databaseTypesSelect(string $selected = '', string $name = 'driver'): string
 	{
 		$connectors = Driver::getConnectors();
@@ -467,6 +485,38 @@ class Setup extends AbstractHelper
 		}
 
 		return $ret;
+	}
+
+	private function getThemeCSSFiles(): array
+	{
+		$ret = [];
+
+		try
+		{
+			/** @var DirectoryIterator $file */
+			foreach (new DirectoryIterator(APATH_MEDIA . '/css') as $file)
+			{
+				if (!$file->isFile() || !str_ends_with($file->getBasename(), '.min.css'))
+				{
+					continue;
+				}
+
+				$basename = $file->getBasename('.min.css');
+
+				if ($basename === 'fontawesome')
+				{
+					continue;
+				}
+
+				$ret[] = $basename;
+			}
+
+			return $ret;
+		}
+		catch (\Throwable)
+		{
+			return [];
+		}
 	}
 
 	private function countryToEmoji(?string $cCode = null): string

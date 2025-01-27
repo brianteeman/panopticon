@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -14,7 +14,7 @@ defined('AKEEBA') || die;
 $config          = $this->item->getConfig();
 $extensionsList  = $config->get('extensions.list');
 $noExtensions    = empty($extensionsList);
-$hasAkeebaBackup = !$noExtensions && $this->item->hasAkeebaBackup();
+$hasAkeebaBackup = !$noExtensions && $this->item->hasAkeebaBackup(true);
 $info            = $config->get('akeebabackup.info');
 $endpointOptions = $config->get('akeebabackup.endpoint');
 $disable         = $noExtensions || !$hasAkeebaBackup || empty($info)
@@ -58,7 +58,7 @@ $disable         = $disable || empty($profiles);
             </p>
         </div>
 
-        <div class="alert alert-danger {{ !$noExtensions && $hasAkeebaBackup ? 'd-none' : '' }}"
+        <div class="alert alert-danger {{ (!$noExtensions && !$hasAkeebaBackup) ? '' : 'd-none' }}"
              id="backupOnUpdateNoAkeebaBackup">
             <h5 class="alert-heading">
                 <span class="fa fa-fw fa-xmark-circle" aria-hidden="true"></span>

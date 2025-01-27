@@ -1,15 +1,15 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
 defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Factory;
-use Akeeba\Panopticon\Helper\DarkModeEnum;
 use Akeeba\Panopticon\Helper\DefaultTemplate as TemplateHelper;
+use Akeeba\Panopticon\Library\Enumerations\DarkModeEnum;
 use Akeeba\Panopticon\Library\Version\Version;
 use Awf\Uri\Uri;
 use Awf\Utils\Template;
@@ -38,6 +38,8 @@ $isMenuEnabled = $this->getMenu()->isEnabled('main');
 $isDebug       = defined('AKEEBADEBUG') && AKEEBADEBUG;
 $themeColor    = TemplateHelper::getThemeColour();
 $importMap     = TemplateHelper::getImportMapAsJson();
+$view          = $this->getContainer()->input->getCmd('view', 'main') ?: 'main';
+
 ?>
 <!DOCTYPE html>
 <html lang="<?= $langCode ?>">
@@ -79,7 +81,7 @@ $importMap     = TemplateHelper::getImportMapAsJson();
 	<meta name="theme-color" content="<?= $themeColor ?>">
 	<?php endif; ?>
 </head>
-<body data-bs-theme="<?= $darkModeValue ?: '' ?>">
+<body data-bs-theme="<?= $darkModeValue ?: '' ?>" class="panopticon-view-<?= $view ?>">
 
 <?php // Top header ?>
 <?php if (!$isBareDisplay): ?>
@@ -99,7 +101,7 @@ $importMap     = TemplateHelper::getImportMapAsJson();
 							</sup>
 						<?php elseif ($versionTag === Version::TAG_TYPE_BETA): ?>
 							<sup>
-								<span class="badge bg-warning"><?= ucfirst($versionTag) ?></span>
+								<span class="badge text-bg-warning"><?= ucfirst($versionTag) ?></span>
 							</sup>
 						<?php elseif ($versionTag === Version::TAG_TYPE_RELEASE_CANDIDATE): ?>
 							<sup>
@@ -122,7 +124,7 @@ $importMap     = TemplateHelper::getImportMapAsJson();
 							</sup>
 						<?php elseif ($versionTag === Version::TAG_TYPE_BETA): ?>
 							<sup>
-								<span class="badge bg-warning"><?= ucfirst($versionTag) ?></span>
+								<span class="badge text-bg-warning"><?= ucfirst($versionTag) ?></span>
 							</sup>
 						<?php elseif ($versionTag === Version::TAG_TYPE_RELEASE_CANDIDATE): ?>
 							<sup>
@@ -180,7 +182,7 @@ $importMap     = TemplateHelper::getImportMapAsJson();
 </main>
 
 <?php if (!$isBareDisplay): ?>
-	<footer class="container-xl bg-dark text-light p-3 pb-3 text-light small sticky-bottom d-print-none" data-bs-theme="dark">
+	<footer class="container-xl bg-dark text-light p-3 pb-3 text-light small sticky-sm-bottom d-print-none" data-bs-theme="dark">
 		<?= $text->text('PANOPTICON_APP_TITLE') ?> <?= Version::create(AKEEBA_PANOPTICON_VERSION)->shortVersion(true) ?><?php if (Version::create(AKEEBA_PANOPTICON_VERSION)->hasTag()): ?><span class="text-muted small">.<?= Version::create(AKEEBA_PANOPTICON_VERSION)->tag() ?></span><?php endif; ?>
 		<?php if ($isDebug): ?>
 			<span class="text-body-tertiary">on</span>

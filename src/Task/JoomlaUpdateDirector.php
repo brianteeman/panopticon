@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -18,6 +18,7 @@ use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Model\Task;
 use Akeeba\Panopticon\Task\Trait\EmailSendingTrait;
 use Akeeba\Panopticon\Task\Trait\EnqueueJoomlaUpdateTrait;
+use Akeeba\Panopticon\Task\Trait\SaveSiteTrait;
 use Akeeba\Panopticon\Task\Trait\SiteNotificationEmailTrait;
 use Awf\Registry\Registry;
 use Awf\Utils\ArrayHelper;
@@ -32,6 +33,7 @@ class JoomlaUpdateDirector extends AbstractCallback
 	use EnqueueJoomlaUpdateTrait;
 	use SiteNotificationEmailTrait;
 	use EmailSendingTrait;
+	use SaveSiteTrait;
 
 	public function __invoke(object $task, Registry $storage): int
 	{
@@ -41,6 +43,7 @@ class JoomlaUpdateDirector extends AbstractCallback
 		$limitStart = (int) $storage->get('limitStart', 0);
 		$limit      = (int) $storage->get('limit', $params->get('limit', 100));
 		$force      = (bool) $storage->get('force', $params->get('force', false));
+		$forceQueue = (bool) $storage->get('force_queue', $params->get('force_queue', false));
 		$filterIDs  = $storage->get('filter.ids', $params->get('ids', []));
 
 		/**
@@ -166,6 +169,7 @@ class JoomlaUpdateDirector extends AbstractCallback
 			$query = $db->getQuery(true)
 				->update($db->quoteName('#__tasks'))
 				->set($db->quoteName('enabled') . ' = 0')
+                ->where($db->quoteName('type').' like '.$db->quote('joomlaupdate'))
 				->where($db->quoteName('site_id') . ' IN(' . implode(',', $siteIDs) . ')');
 			$db->setQuery($query)->execute();
 		}
@@ -198,25 +202,6 @@ class JoomlaUpdateDirector extends AbstractCallback
 			// Get the site's configuration
 			$siteConfig = $site->getConfig() ?? new Registry();
 
-			// Log a report entry: we found an update for the site
-			try
-			{
-				Reports::fromCoreUpdateFound(
-					$site->getId(),
-					$siteConfig->get('core.current.version'),
-					$siteConfig->get('core.latest.version')
-				)->save();
-			}
-			catch (\Throwable $e)
-			{
-				$this->logger->error(
-					sprintf(
-						'Problem saving report log entry [%s:%s]: %d %s',
-						$e->getFile(), $e->getLine(), $e->getCode(), $e->getMessage()
-					)
-				);
-			}
-
 			// Process the update action for the site
 			$updateAction = $siteConfig->get("config.core_update.install", '')
 				?: $this->container->appConfig->get('tasks_coreupdate_install', 'patch');
@@ -225,6 +210,14 @@ class JoomlaUpdateDirector extends AbstractCallback
 			switch ($updateAction)
 			{
 				case "none":
+					if (!$this->mustSchedule($site, true))
+					{
+						continue 2;
+					}
+
+					// Log a report entry: we found an update for the site
+					$this->logCoreUpdateFoundToSiteReports($site, $siteConfig);
+
 					$this->logger->info(
 						sprintf(
 							'Site %d (%s) is configured to neither update, nor send emails.',
@@ -232,10 +225,20 @@ class JoomlaUpdateDirector extends AbstractCallback
 							$site->name
 						)
 					);
+
 					break;
 
 				case "email":
 				default:
+					// Do I have to send an email?
+					if (!$forceQueue && !$this->mustSchedule($site, true))
+					{
+						continue 2;
+					}
+
+					// Log a report entry: we found an update for the site
+					$this->logCoreUpdateFoundToSiteReports($site, $siteConfig);
+
 					$this->logger->info(
 						sprintf(
 							'Site %d (%s) is configured to only send an email about Joomla! %s availability.',
@@ -245,16 +248,19 @@ class JoomlaUpdateDirector extends AbstractCallback
 						)
 					);
 
-					// Do I have to send an email?
-					if (!$this->mustSchedule($site, true))
-					{
-						continue 2;
-					}
-
 					$this->sendEmail('joomlaupdate_found', $site);
 					break;
 
 				case "update":
+					// Do I have to enqueue?
+					if (!$forceQueue && !$this->mustSchedule($site, false))
+					{
+						continue 2;
+					}
+
+					// Log a report entry: we found an update for the site
+					$this->logCoreUpdateFoundToSiteReports($site, $siteConfig);
+
 					$this->logger->info(
 						sprintf(
 							'Site %d (%s) will be queued for update to Joomla! %s.',
@@ -264,16 +270,11 @@ class JoomlaUpdateDirector extends AbstractCallback
 						)
 					);
 
-					// Do I have to enqueue?
-					if (!$this->mustSchedule($site, false))
-					{
-						continue 2;
-					}
-
 					// Send email
 					$this->sendEmail('joomlaupdate_will_install', $site);
 
 					// Enqueue task
+					/** @noinspection PhpParamsInspection */
 					$this->enqueueJoomlaUpdate($site, $this->container);
 					break;
 			}
@@ -298,6 +299,12 @@ class JoomlaUpdateDirector extends AbstractCallback
 				$query->jsonExtract($db->quoteName('config'), '$.core.canUpgrade'),
 			]
 		);
+
+		// Only fetch Joomla! sites. NB! Legacy records do not have a cmsType.
+		$query->andWhere([
+			$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' = ' . $db->quote('joomla'),
+			$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' IS NULL'
+		]);
 
 		if (!$force)
 		{
@@ -363,7 +370,7 @@ class JoomlaUpdateDirector extends AbstractCallback
 				$current = Version::create($siteConfig->get('core.current.version'));
 				$latest  = Version::create($siteConfig->get('core.latest.version'));
 
-				return $current->major() === $current->minor() ? "update" : "email";
+				return $current->major() === $latest->major() ? "update" : "email";
 				break;
 		}
 	}
@@ -442,11 +449,46 @@ class JoomlaUpdateDirector extends AbstractCallback
 			return false;
 		}
 
-		$siteConfig->set('director.joomlaupdate.lastLatestVersion', $latestVersion);
-		$site->setFieldValue('config', $siteConfig->toString());
-		$site->save();
+		$this->saveSite(
+			$site,
+			function (Site $site) use ($latestVersion) {
+				$siteConfig = $site->getConfig() ?? new Registry();
+				$siteConfig->set('director.joomlaupdate.lastLatestVersion', $latestVersion);
+				$site->setFieldValue('config', $siteConfig->toString());
+			}
+		);
 
 		return true;
+	}
+
+	/**
+	 * Add a Site Reports log entry about finding a new CMS version.
+	 *
+	 * @param   Site      $site
+	 * @param   Registry  $siteConfig
+	 *
+	 * @return  void
+	 * @since   1.2.2
+	 */
+	private function logCoreUpdateFoundToSiteReports(Site $site, Registry $siteConfig): void
+	{
+		try
+		{
+			Reports::fromCoreUpdateFound(
+				$site->getId(),
+				$siteConfig->get('core.current.version'),
+				$siteConfig->get('core.latest.version')
+			)->save();
+		}
+		catch (\Throwable $e)
+		{
+			$this->logger->error(
+				sprintf(
+					'Problem saving report log entry [%s:%s]: %d %s',
+					$e->getFile(), $e->getLine(), $e->getCode(), $e->getMessage()
+				)
+			);
+		}
 	}
 
 }

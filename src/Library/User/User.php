@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -10,6 +10,7 @@ namespace Akeeba\Panopticon\Library\User;
 defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Factory;
+use Akeeba\Panopticon\Library\Password\HIBPCheck;
 use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Model\Trait\UserAvatarTrait;
 use Awf\Container\ContainerAwareInterface;
@@ -22,6 +23,12 @@ class User extends \Awf\User\User implements ContainerAwareInterface
 	use ContainerAwareTrait;
 
 	private array $groupPrivileges = [];
+
+	public function __construct()
+	{
+		// Set up a default container for this object
+		$this->setContainer(Factory::getContainer());
+	}
 
 	public function bind(&$data)
 	{
@@ -99,9 +106,25 @@ class User extends \Awf\User\User implements ContainerAwareInterface
 		return $this->groupPrivileges;
 	}
 
+	public function setPassword($password)
+	{
+		if (
+			$this->getContainer()->appConfig->get('password_hibp', 1)
+			&& (new HIBPCheck($this->getContainer()))->isPasswordLeaked($password)
+		)
+		{
+			throw new \RuntimeException(
+				$this->getContainer()->language->text('PANOPTICON_SYSERROR_LEAKED_PASSWORD')
+			);
+		}
+
+		parent::setPassword($password);
+	}
+
+
 	private function loadGroupPrivileges(): array
 	{
-		$db       = Factory::getContainer()->db;
+		$db       = $this->getContainer()->db;
 		$groupIDs = implode(
 			',',
 			array_map(

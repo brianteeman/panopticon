@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -14,8 +14,6 @@ use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Library\Task\SymfonyStyleAwareInterface;
 use Akeeba\Panopticon\Library\Task\SymfonyStyleAwareTrait;
 use Awf\Registry\Registry;
-use Psr\Log\LoggerAwareInterface;
-use Psr\Log\LoggerAwareTrait;
 
 defined('AKEEBA') || die;
 
@@ -54,7 +52,7 @@ class MaxExec extends AbstractCallback implements SymfonyStyleAwareInterface
 		}
 
 		// Clear the maxexec.lasttick indicator
-		$this->ioStyle->info('Clearing previous execution information');
+		$this->ioStyle?->info('Clearing previous execution information');
 		$this->logger->debug('Clearing the last tick indicator in the database');
 
 		$db    = $this->container->db;
@@ -97,7 +95,7 @@ class MaxExec extends AbstractCallback implements SymfonyStyleAwareInterface
 		$execTime  = 0.0;
 		$appConfig = $this->container->appConfig;
 
-		$bar       = $this->ioStyle->createProgressBar($maxExecution);
+		$bar       = $this->ioStyle?->createProgressBar($maxExecution);
 
 		$bar?->setRedrawFrequency(1);
 		$bar?->display();

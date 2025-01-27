@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,28 +9,22 @@ namespace Akeeba\Panopticon\Model;
 
 defined('AKEEBA') || die;
 
-use Akeeba\Panopticon\Exception\SiteConnection\APIApplicationHasPHPMessages;
-use Akeeba\Panopticon\Exception\SiteConnection\APIApplicationIsBlocked;
-use Akeeba\Panopticon\Exception\SiteConnection\APIApplicationIsBroken;
-use Akeeba\Panopticon\Exception\SiteConnection\APIInvalidCredentials;
-use Akeeba\Panopticon\Exception\SiteConnection\cURLError;
-use Akeeba\Panopticon\Exception\SiteConnection\FrontendPasswordProtection;
-use Akeeba\Panopticon\Exception\SiteConnection\InvalidHostName;
-use Akeeba\Panopticon\Exception\SiteConnection\PanopticonConnectorNotEnabled;
-use Akeeba\Panopticon\Exception\SiteConnection\SelfSignedSSL;
-use Akeeba\Panopticon\Exception\SiteConnection\SSLCertificateProblem;
-use Akeeba\Panopticon\Exception\SiteConnection\WebServicesInstallerNotEnabled;
 use Akeeba\Panopticon\Library\Cache\CallbackController;
 use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Enumerations\JoomlaUpdateRunState;
+use Akeeba\Panopticon\Library\Enumerations\WordPressUpdateRunState;
 use Akeeba\Panopticon\Library\SiteInfo\Retriever;
 use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Model\Trait\AdminToolsIntegrationTrait;
 use Akeeba\Panopticon\Model\Trait\AkeebaBackupIntegrationTrait;
 use Akeeba\Panopticon\Model\Trait\ApplyUserGroupsToSiteQueryTrait;
+use Akeeba\Panopticon\Model\Trait\CmsFamilyFilterSeparatorTrait;
+use Akeeba\Panopticon\Model\Trait\SiteTestConnectionJoomlaTrait;
+use Akeeba\Panopticon\Model\Trait\SiteTestConnectionWPTrait;
 use Akeeba\Panopticon\Task\RefreshSiteInfo;
 use Akeeba\Panopticon\Task\Trait\ApiRequestTrait;
 use Akeeba\Panopticon\Task\Trait\JsonSanitizerTrait;
+use Akeeba\Panopticon\Task\Trait\SaveSiteTrait;
 use Awf\Container\Container;
 use Awf\Date\Date;
 use Awf\Mvc\DataModel;
@@ -38,17 +32,18 @@ use Awf\Registry\Registry;
 use Awf\Uri\Uri;
 use Awf\User\User;
 use Awf\Utils\ArrayHelper;
+use Awf\Utils\Template;
 use DateTime;
 use Exception;
-use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\RequestOptions;
+use Iodev\Whois\Factory as WhoisFactory;
+use Iodev\Whois\Loaders\CurlLoader;
 use Psr\Cache\CacheException;
 use Psr\Cache\InvalidArgumentException;
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
-use stdClass;
 use Throwable;
 
 /**
@@ -76,6 +71,10 @@ class Site extends DataModel
 	use AdminToolsIntegrationTrait;
 	use ApplyUserGroupsToSiteQueryTrait;
 	use JsonSanitizerTrait;
+	use CmsFamilyFilterSeparatorTrait;
+	use SiteTestConnectionJoomlaTrait;
+	use SiteTestConnectionWPTrait;
+	use SaveSiteTrait;
 
 	/**
 	 * Represents the configuration for a site as a Registry object.
@@ -210,9 +209,41 @@ class Site extends DataModel
 			);
 		}
 
-		// Filter: cmsFamily
-		$fltCmsFamily = $this->getState('cmsFamily', null, 'cmd');
+		// Filters: cmsType and cmsFamily
+		[$fltCmsType, $fltCmsFamily] = $this->separateCmsFamilyFilter($this->getState('cmsFamily', null, 'cmd'));
+		$fltCmsType = $this->getState('cmsType', $fltCmsType, 'cmd');
 
+		// Filter: cmsType
+		if (is_string($fltCmsType))
+		{
+			// Reject invalid filter values
+			$fltCmsType = strtolower(trim($fltCmsType));
+			$fltCmsType = in_array($fltCmsType, array_column(CMSType::cases(), 'value'))
+				? $fltCmsType : null;
+		}
+
+		if (!empty($fltCmsType))
+		{
+			// Special case for `joomla`. Legacy entries don't have a CMSType.
+			if ($fltCmsType === CMSType::JOOMLA->value)
+			{
+				$query->where(
+					'(' .
+					$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' = ' . $db->quote($fltCmsType) .
+					' OR ' .
+					$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' IS NULL' .
+					')'
+				);
+			}
+			else
+			{
+				$query->where(
+					$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' = ' . $db->quote($fltCmsType),
+				);
+			}
+		}
+
+		// Filter: cmsFamily
 		if ($fltCmsFamily)
 		{
 			$query->where(
@@ -304,6 +335,14 @@ class Site extends DataModel
 			throw new RuntimeException($this->getLanguage()->text('PANOPTICON_SITES_ERR_NO_URL'));
 		}
 
+		$cmsType = $this->getConfig()->get('cmsType', 'joomla');
+		$this->getConfig()->set(
+			'cmsType',
+			in_array($cmsType, array_column(CMSType::cases(), 'value'))
+				? $cmsType
+				: 'joomla'
+		);
+
 		parent::check();
 
 		$this->url = $this->cleanUrl($this->url);
@@ -313,275 +352,11 @@ class Site extends DataModel
 
 	public function testConnection(bool $getWarnings = true): array
 	{
-		/** @var \Akeeba\Panopticon\Container $container */
-		$container = $this->container;
-		$client    = $container->httpFactory->makeClient(cache: false, singleton: false);
-
-		$session = $this->getContainer()->segment;
-		$session->set('testconnection.step', null);
-		$session->set('testconnection.http_status', null);
-		$session->set('testconnection.body', null);
-		$session->set('testconnection.headers', null);
-		$session->set('testconnection.exception.type', null);
-		$session->set('testconnection.exception.message', null);
-		$session->set('testconnection.exception.file', null);
-		$session->set('testconnection.exception.line', null);
-		$session->set('testconnection.exception.trace', null);
-
-		// Try to get index.php/v1/extensions unauthenticated
-		try
-		{
-			$totalTimeout   = max(30, $this->container->appConfig->get('max_execution', 60) / 2);
-			$connectTimeout = max(5, $totalTimeout / 5);
-
-			$options                                  = $container->httpFactory->getDefaultRequestOptions();
-			$options[RequestOptions::HEADERS]         = [
-				'Accept'     => 'application/vnd.api+json',
-				'User-Agent' => 'panopticon/' . AKEEBA_PANOPTICON_VERSION,
-			];
-			$options[RequestOptions::HTTP_ERRORS]     = false;
-			$options[RequestOptions::CONNECT_TIMEOUT] = $connectTimeout;
-			$options[RequestOptions::TIMEOUT]         = $totalTimeout;
-
-			$session->set('testconnection.step', 'Unauthenticated access (can I even access the API at all?)');
-
-			[$url,] = $this->getRequestOptions($this, '/index.php/v1/extensions');
-
-			$response = $client->get($url, $options);
-		}
-		catch (GuzzleException $e)
-		{
-			$this->updateDebugInfoInSession(null, null, $e);
-
-			$message = $e->getMessage();
-
-			if (str_contains($message, 'self-signed certificate'))
-			{
-				throw new SelfSignedSSL('Self-signed certificate', previous: $e);
-			}
-
-			if (str_contains($message, 'SSL certificate problem'))
-			{
-				throw new SSLCertificateProblem('SSL certificate problem', previous: $e);
-			}
-
-			if (str_contains($message, 'Could not resolve host'))
-			{
-				$hostname = empty($this->url) ? '(no host provided)' : (new Uri($this->url))->getHost();
-				throw new InvalidHostName(sprintf('Invalid hostname %s', $hostname));
-			}
-
-			// DO NOT MOVE! We also use the same flash variable to report Guzzle errors
-			$this->container->segment->setFlash('site_connection_curl_error', $e->getMessage());
-
-			if (str_contains($message, 'cURL error'))
-			{
-				throw new cURLError('Miscellaneous cURL Error', previous: $e);
-			}
-
-			// If we have no response object something went _really_ wrong. Throw it back and let the front-end handle it.
-			if (!isset($response))
-			{
-				$this->container->segment->setFlash('site_connection_guzzle_error', $e->getMessage());
-
-				throw $e;
-			}
-		}
-
-		$bodyContent = $bodyContent ?? $response?->getBody()?->getContents();
-		$this->updateDebugInfoInSession($response ?? null, $bodyContent, $e ?? null);
-
-		if (!isset($response))
-		{
-			throw new RuntimeException('No response to the unauthenticated API request probe.', 500);
-		}
-
-		if ($response->getStatusCode() === 403)
-		{
-			throw new APIApplicationIsBlocked('The API application is blocked (403)');
-		}
-		elseif ($response->getStatusCode() === 404)
-		{
-			throw new WebServicesInstallerNotEnabled(
-				'Cannot list installed extensions. Web Services - Installer is not enabled.'
-			);
-		}
-		elseif ($response->getStatusCode() !== 401)
-		{
-			$this->container->segment->setFlash('site_connection_http_code', $response->getStatusCode());
-
-			if (!str_contains($bodyContent, '{"errors":[{"title":"Forbidden"}]}'))
-			{
-				throw new APIApplicationIsBroken(
-					sprintf('The API application does not work property (HTTP %d)', $response->getStatusCode())
-				);
-			}
-
-			$canWorkAround = $this->jsonValidate($this->sanitizeJson($bodyContent));
-
-			if (!$canWorkAround)
-			{
-				throw new APIApplicationHasPHPMessages();
-			}
-		}
-
-		// Try to access index.php/v1/extensions **authenticated**
-		[$url, $options] = $this->getRequestOptions($this, '/index.php/v1/extensions?page[limit]=2000');
-		$options[RequestOptions::HTTP_ERRORS] = false;
-
-		$session->set('testconnection.step', 'Authenticated access (can I get information out of the API?)');
-
-		try
-		{
-			$response    = $client->get($url, $options);
-			$bodyContent = $response?->getBody()?->getContents();
-		}
-		catch (GuzzleException $e)
-		{
-			$this->updateDebugInfoInSession($response ?? null, $bodyContent, $e);
-
-			throw $e;
-		}
-
-		$this->updateDebugInfoInSession($response ?? null, $bodyContent, $e ?? null);
-
-		if (!isset($response))
-		{
-			throw new RuntimeException('No response to the authenticated API request probe.', 500);
-		}
-
-		if ($response->getStatusCode() === 403)
-		{
-			throw new APIApplicationIsBlocked('The API application is blocked (403)');
-		}
-		elseif ($response->getStatusCode() === 404)
-		{
-			throw new WebServicesInstallerNotEnabled(
-				'Cannot list installed extensions. Web Services - Installer is not enabled.'
-			);
-		}
-		elseif ($response->getStatusCode() === 401)
-		{
-			try
-			{
-				$temp = @json_decode($this->sanitizeJson($bodyContent), true);
-			}
-			catch (Exception $e)
-			{
-				$temp = null;
-			}
-
-			if (
-				is_array($temp) && isset($temp['errors']) && is_array($temp['errors'])
-				&& isset($temp['errors'][0])
-				&& is_array($temp['errors'][0])
-				&& isset($temp['errors'][0]['code'])
-				&& $temp['errors'][0]['code'] == 401
-			)
-			{
-				throw new APIInvalidCredentials('The API Token is invalid');
-			}
-
-			throw new FrontendPasswordProtection();
-		}
-		elseif ($response->getStatusCode() !== 200)
-		{
-			$this->container->segment->setFlash('site_connection_http_code', $response->getStatusCode());
-
-			throw new APIApplicationIsBroken(
-				sprintf('The API application does not work property (HTTP %d)', $response->getStatusCode())
-			);
-		}
-
-		try
-		{
-			$results = @json_decode($this->sanitizeJson($bodyContent ?? '{}'));
-		}
-		catch (Throwable $e)
-		{
-			$results = new stdClass();
-		}
-
-		if (empty($results?->data))
-		{
-			throw new WebServicesInstallerNotEnabled(
-				'Cannot list installed extensions. Web Services - Installer is not enabled.'
-			);
-		}
-
-		// Check if Panopticon is enabled
-		$allEnabled = array_reduce(
-			array_filter(
-				$results->data,
-				fn(object $data) => str_contains($data->attributes?->name ?? '', 'Panopticon')
-			),
-			fn(bool $carry, object $data) => $carry
-			                                 && (($data->attributes?->status ?? null) == 1
-			                                     || $data->attributes?->enabled == 1),
-			true
-		);
-
-		if (!$allEnabled)
-		{
-			throw new PanopticonConnectorNotEnabled('The Panopticon Connector component or plugin is not enabled');
-		}
-
-		if (!$getWarnings)
-		{
-			return [];
-		}
-
-		$warnings = [];
-
-		// Check if Akeeba Backup and its API plugin are enabled
-		$allEnabled = array_reduce(
-			array_filter(
-				$results->data,
-				fn(object $data) => str_contains($data->attributes?->name ?? '', 'Akeeba Backup')
-				                    && (
-					                    $data->attributes?->type === 'component'
-					                    || (
-						                    $data->attributes?->type === 'plugin'
-						                    && $data->attributes?->folder === 'webservices'
-					                    )
-				                    )
-			),
-			fn(bool $carry, object $data) => $carry && $data->attributes?->status == 1,
-			true
-		);
-
-		if (!$allEnabled)
-		{
-			$warnings[] = 'akeebabackup';
-		}
-
-		// Check for Admin Tools component
-		$allEnabled = array_reduce(
-			array_filter(
-				$results->data,
-				fn(object $data) => str_contains($data->attributes?->name ?? '', 'Admin Tools')
-				                    && (
-					                    $data->attributes?->type === 'component'
-					                    || (
-						                    $data->attributes?->type === 'plugin'
-						                    && $data->attributes?->folder === 'system'
-					                    )
-				                    )
-			),
-			fn(bool $carry, object $data) => $carry && $data->attributes?->status == 1,
-			true
-		);
-
-		if (!$allEnabled)
-		{
-			$warnings[] = 'admintools';
-		}
-
-
-		$session->set('testconnection.step', null);
-		$this->updateDebugInfoInSession(null, null, null);
-
-		return $warnings;
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->testConnectionJoomla($getWarnings),
+			CMSType::WORDPRESS => $this->testConnectionWordPress($getWarnings),
+			default => []
+		};
 	}
 
 	/**
@@ -593,18 +368,30 @@ class Site extends DataModel
 	{
 		$url = rtrim($this->url, "/ \t\n\r\0\x0B");
 
-		if (str_ends_with($url, '/panopticon_api'))
+		switch ($this->cmsType())
 		{
-			$url = rtrim(substr($url, 0, -15), '?/');
+			case CMSType::WORDPRESS:
+				if (str_ends_with(rtrim($url, '/'), '/wp-json'))
+				{
+					$url = substr(rtrim($url, '/'), 0, -8);
+				}
+				break;
 
-			if (str_ends_with($url, '/index.php'))
-			{
-				$url = substr($url, 0, -10);
-			}
-		}
-		elseif (str_ends_with($url, '/api'))
-		{
-			$url = rtrim(substr($url, 0, -4), '/');
+			case CMSType::JOOMLA:
+				if (str_ends_with($url, '/panopticon_api'))
+				{
+					$url = rtrim(substr($url, 0, -15), '?/');
+
+					if (str_ends_with($url, '/index.php'))
+					{
+						$url = substr($url, 0, -10);
+					}
+				}
+				elseif (str_ends_with($url, '/api'))
+				{
+					$url = rtrim(substr($url, 0, -4), '/');
+				}
+				break;
 		}
 
 		return $url;
@@ -618,9 +405,15 @@ class Site extends DataModel
 	 * @return  string
 	 * @since   1.0.0
 	 */
-	public function getAdminUrl(): string
+	public function getAdminUrl(bool $withCustomAdminDir = true): string
 	{
-		$url    = $this->getBaseUrl() . '/administrator';
+		$cmsType = $this->cmsType();
+		$url     = match ($cmsType)
+		{
+			CMSType::JOOMLA => $this->getBaseUrl() . '/administrator',
+			CMSType::WORDPRESS => $this->getBaseUrl() . '/wp-admin'
+		};
+
 		$config = $this->getConfig();
 
 		if (!$config->get('core.admintools.enabled', false) || $config->get('core.admintools.renamed', false))
@@ -629,8 +422,18 @@ class Site extends DataModel
 		}
 
 		$adminDir = $config->get('core.admintools.admindir', 'administrator');
+		$standardAdmin = match ($cmsType)
+		{
+			CMSType::JOOMLA => 'administrator',
+			CMSType::WORDPRESS => 'wp-admin'
+		};
 
-		if (!empty($adminDir) && $adminDir !== 'administrator')
+		if (!$withCustomAdminDir)
+		{
+			$adminDir = $standardAdmin;
+		}
+
+		if (!empty($adminDir) && $adminDir !== $standardAdmin)
 		{
 			$url = $this->getBaseUrl() . '/' . trim($adminDir, '/');
 		}
@@ -639,7 +442,10 @@ class Site extends DataModel
 
 		if (!empty($secretWord))
 		{
-			if (empty($adminDir) || $adminDir === 'administrator')
+			if (
+				$cmsType === CMSType::JOOMLA &&
+				(empty($adminDir) || $adminDir === 'administrator')
+			)
 			{
 				$url .= '/index.php';
 			}
@@ -657,6 +463,11 @@ class Site extends DataModel
 
 	public function fixCoreUpdateSite(): void
 	{
+		if ($this->cmsType() !== CMSType::JOOMLA)
+		{
+			throw new RuntimeException('This is only possible with Joomla! sites.');
+		}
+
 		/** @var \Akeeba\Panopticon\Container $container */
 		$container = $this->container;
 		$client    = $container->httpFactory->makeClient(cache: false, singleton: false);
@@ -717,42 +528,114 @@ class Site extends DataModel
 
 	public function getExtensionsUpdateTask(): ?Task
 	{
-		return $this->getSiteSpecificTask('extensionsupdate');
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->getSiteSpecificTask('extensionsupdate'),
+			CMSType::WORDPRESS => $this->getSiteSpecificTask('pluginsupdate'),
+			default => null
+		};
+	}
+
+	public function getPluginsUpdateTask(): ?Task
+	{
+		return $this->getExtensionsUpdateTask();
 	}
 
 	public function getJoomlaUpdateTask(): ?Task
 	{
-		return $this->getSiteSpecificTask('joomlaupdate');
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->getSiteSpecificTask('joomlaupdate'),
+			CMSType::WORDPRESS => $this->getSiteSpecificTask('wordpressupdate'),
+			default => null
+		};
+	}
+
+	public function getWordPressUpdateTask(): ?Task
+	{
+		return $this->getJoomlaUpdateTask();
 	}
 
 	public function isExtensionsUpdateTaskStuck(): bool
 	{
-		return $this->isSiteSpecificTaskStuck('extensionsupdate');
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->isSiteSpecificTaskStuck('extensionsupdate'),
+			CMSType::WORDPRESS => $this->isSiteSpecificTaskStuck('pluginsupdate'),
+			default => false
+		};
+	}
+
+	public function isPluginsUpdateTaskStuck(): bool
+	{
+		return $this->isExtensionsUpdateTaskStuck();
 	}
 
 	public function isJoomlaUpdateTaskStuck(): bool
 	{
-		return $this->isSiteSpecificTaskStuck('joomlaupdate');
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->isSiteSpecificTaskStuck('joomlaupdate'),
+			CMSType::WORDPRESS => $this->isSiteSpecificTaskStuck('wordpressupdate'),
+			default => false
+		};
+	}
+
+	public function isWordPressUpdateTaskStuck(): bool
+	{
+		return $this->isJoomlaUpdateTaskStuck();
 	}
 
 	public function isExtensionsUpdateTaskScheduled(): bool
 	{
-		return $this->isSiteSpecificTaskScheduled('extensionsupdate');
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->isSiteSpecificTaskScheduled('extensionsupdate'),
+			CMSType::WORDPRESS => $this->isSiteSpecificTaskScheduled('pluginsupdate'),
+			default => false
+		};
+	}
+
+	public function isPluginsUpdateTaskScheduled(): bool
+	{
+		return $this->isExtensionsUpdateTaskScheduled();
 	}
 
 	public function isJoomlaUpdateTaskScheduled(): bool
 	{
-		return $this->isSiteSpecificTaskScheduled('joomlaupdate');
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->isSiteSpecificTaskScheduled('joomlaupdate'),
+			CMSType::WORDPRESS => $this->isSiteSpecificTaskScheduled('wordpressupdate'),
+			default => false
+		};
+	}
+
+	public function isWordPressUpdateTaskScheduled(): bool
+	{
+		return $this->isJoomlaUpdateTaskScheduled();
 	}
 
 	public function isJoomlaUpdateTaskRunning(): bool
 	{
-		return $this->isSiteSpecificTaskRunning('joomlaupdate');
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->isSiteSpecificTaskRunning('joomlaupdate'),
+			CMSType::WORDPRESS => $this->isSiteSpecificTaskRunning('wordpressupdate'),
+			default => false
+		};
+	}
+
+	public function isWordPressUpdateTaskRunning(): bool
+	{
+		return $this->isJoomlaUpdateTaskRunning();
 	}
 
 	public function isExtensionsUpdateTaskRunning(): bool
 	{
-		return $this->isSiteSpecificTaskRunning('extensionsupdate');
+		return match ($this->cmsType()) {
+			CMSType::JOOMLA => $this->isSiteSpecificTaskRunning('extensionsupdate'),
+			CMSType::WORDPRESS => $this->isSiteSpecificTaskRunning('pluginsupdate'),
+			default => false
+		};
+	}
+
+	public function isPluginsUpdateTaskRunning(): bool
+	{
+		return $this->isExtensionsUpdateTaskRunning();
 	}
 
 	public function getExtensionsList(bool $sortByName = true): array
@@ -834,17 +717,22 @@ class Site extends DataModel
 
 	public function getExtensionsScheduledForUpdate(): array
 	{
-		$queueName = sprintf('extensions.%d', $this->getId());
-		$db        = $this->getDbo();
-		$query     = $db->getQuery(true);
+		$queueName    = sprintf('extensions.%d', $this->getId());
+		$altQueueName = sprintf('plugins.%d', $this->getId());
+		$db           = $this->getDbo();
+		$query        = $db->getQuery(true);
 		$query
 			->select($query->jsonExtract($db->quoteName('item'), '$.data'))
 			->from($db->quoteName('#__queue'))
 			->where(
 				[
-					$query->jsonExtract($db->quoteName('item'), '$.queueType') . ' = ' . $db->quote($queueName),
 					$query->jsonExtract($db->quoteName('item'), '$.siteId') . ' = ' . (int) $this->getId(),
 				]
+			)->extendWhere(
+				'AND', [
+				$query->jsonExtract($db->quoteName('item'), '$.queueType') . ' = ' . $db->quote($queueName),
+				$query->jsonExtract($db->quoteName('item'), '$.queueType') . ' = ' . $db->quote($altQueueName),
+			], 'OR'
 			);
 
 
@@ -878,6 +766,11 @@ class Site extends DataModel
 
 	public function saveDownloadKey(int $extensionId, ?string $key): void
 	{
+		if ($this->cmsType() !== CMSType::JOOMLA)
+		{
+			throw new RuntimeException('This is only possible with Joomla! sites.');
+		}
+
 		$extensions = (array) $this->getConfig()->get('extensions.list');
 
 		if (!array_key_exists($extensionId, $extensions))
@@ -1063,7 +956,7 @@ class Site extends DataModel
 				return JoomlaUpdateRunState::REFRESH_RUNNING;
 			}
 
-			if (!$joomlaUpdateTask->enabled)
+			if ($joomlaUpdateTask->last_exit_code === Status::EXCEPTION->value || !$joomlaUpdateTask->enabled)
 			{
 				return JoomlaUpdateRunState::REFRESH_ERROR;
 			}
@@ -1077,14 +970,14 @@ class Site extends DataModel
 			return JoomlaUpdateRunState::CANNOT_UPGRADE;
 		}
 
-		// The last auto-update version is the same as the latest available version. Not scheduled.
-		if ($config->get('core.lastAutoUpdateVersion') == $config->get('core.latest.version'))
+		// There is no scheduled update task.
+		if ($joomlaUpdateTask === null)
 		{
 			return JoomlaUpdateRunState::NOT_SCHEDULED;
 		}
 
-		// There is no scheduled update task.
-		if ($joomlaUpdateTask === null)
+		// There is an update task, but it's disabled
+		if (!$joomlaUpdateTask->enabled && in_array($joomlaUpdateTask->last_exit_code, [Status::INITIAL_SCHEDULE->value, Status::OK->value]))
 		{
 			return JoomlaUpdateRunState::NOT_SCHEDULED;
 		}
@@ -1118,6 +1011,103 @@ class Site extends DataModel
 
 		// We should never be here.
 		return JoomlaUpdateRunState::INVALID_STATE;
+	}
+
+	/**
+	 * Get the current run state of the WordPress update task
+	 *
+	 * @return  WordPressUpdateRunState  The run state of the WordPress update task
+	 * @since   1.0.6
+	 */
+	public function getWordPressUpdateRunState(): WordPressUpdateRunState
+	{
+		// This is NOT a Joomla! site.
+		if ($this->cmsType() !== CMSType::WORDPRESS)
+		{
+			return WordPressUpdateRunState::NOT_A_WORDPRESS_SITE;
+		}
+
+		$config           = $this->getConfig();
+		$wpUpdateTask = $this->getWordPressUpdateTask();
+
+		// Special statuses for WP core files refresh (these are not currently supported, therefore mapped to errors)
+		if (
+			$config->get('core.lastAutoUpdateVersion') === $config->get('core.current.version')
+			&& !is_null($wpUpdateTask)
+			&& $wpUpdateTask->last_exit_code != Status::OK->value
+		)
+		{
+			if ($wpUpdateTask->enabled && $wpUpdateTask->last_exit_code == Status::INITIAL_SCHEDULE->value)
+			{
+				// This would indicate a scheduled Refresh, but we don't support it for WordPress
+				return WordPressUpdateRunState::INVALID_STATE;
+			}
+
+			if ($wpUpdateTask->enabled
+			    && in_array(
+				    $wpUpdateTask->last_exit_code, [Status::WILL_RESUME->value, Status::RUNNING->value]
+			    ))
+			{
+				// This would indicate a running Refresh, but it's not supported for WordPress
+				return WordPressUpdateRunState::INVALID_STATE;
+			}
+
+			if ($wpUpdateTask->last_exit_code === Status::EXCEPTION->value || !$wpUpdateTask->enabled)
+			{
+				// This would indicate a refresh error, but it's not supported for WordPress
+				return WordPressUpdateRunState::ERROR;
+			}
+
+			return WordPressUpdateRunState::INVALID_STATE;
+		}
+
+		// We're told there is no update available.
+		if (!$config->get('core.canUpgrade', false))
+		{
+			return WordPressUpdateRunState::CANNOT_UPGRADE;
+		}
+
+		// There is no scheduled update task.
+		if ($wpUpdateTask === null)
+		{
+			return WordPressUpdateRunState::NOT_SCHEDULED;
+		}
+
+		// There is an update task, but it's disabled
+		if (!$wpUpdateTask->enabled && in_array($wpUpdateTask->last_exit_code, [Status::INITIAL_SCHEDULE->value, Status::OK->value]))
+		{
+			return WordPressUpdateRunState::NOT_SCHEDULED;
+		}
+
+		// A new version is available, the update task is enabled, but has returned correctly. Should never happen!
+		if ($wpUpdateTask->enabled && $wpUpdateTask->last_exit_code == Status::OK->value)
+		{
+			return WordPressUpdateRunState::NOT_SCHEDULED;
+		}
+
+		// There is a scheduled update task which will run later.
+		if ($wpUpdateTask->enabled && $wpUpdateTask->last_exit_code == Status::INITIAL_SCHEDULE->value)
+		{
+			return WordPressUpdateRunState::SCHEDULED;
+		}
+
+		// The update task is scheduled, and running.
+		if (($wpUpdateTask->enabled
+		     && in_array(
+			     $wpUpdateTask->last_exit_code, [Status::WILL_RESUME->value, Status::RUNNING->value]
+		     )))
+		{
+			return WordPressUpdateRunState::RUNNING;
+		}
+
+		// An error occurred
+		if ($wpUpdateTask->last_exit_code != Status::OK->value)
+		{
+			return WordPressUpdateRunState::ERROR;
+		}
+
+		// We should never be here.
+		return WordPressUpdateRunState::INVALID_STATE;
 	}
 
 	/**
@@ -1221,7 +1211,8 @@ class Site extends DataModel
 			$container,
 			$pool
 		);
-		$cacheKey           = sha1(
+		$cacheKey           = hash(
+			'sha1',
 			sprintf(
 				'favicon-%d-%s-%d-%s-%s', $this->getId(), $this->getBaseUrl(), $minSize, $type ?? '',
 				$asDataUrl ? 'data' : 'url'
@@ -1230,7 +1221,7 @@ class Site extends DataModel
 
 		if ($onlyIfCached && !$pool->hasItem($cacheKey))
 		{
-			return null;
+			return null ?? $this->getDefaultFavicon();
 		}
 
 		return $callbackController
@@ -1240,7 +1231,167 @@ class Site extends DataModel
 				[$minSize, $type],
 				$cacheKey,
 				31536000
-			);
+			) ?? $this->getDefaultFavicon();
+	}
+
+	private function getDefaultFavicon(): ?string
+	{
+		$filePath = Template::parsePath('media://images/globe-solid.svg', true, $this->getContainer()->application);
+
+		if (!file_exists($filePath))
+		{
+			return null;
+		}
+
+		$contents = @file_get_contents($filePath);
+
+		if ($contents === false)
+        {
+            return null;
+        }
+
+		return sprintf("data:%s;base64,%s", 'image/svg+xml', base64_encode($contents));
+	}
+
+	/**
+	 * Returns select WHOIS information for the domain.
+	 *
+	 * @param   int  $timeout  The network timeout, in seconds
+	 *
+	 * @return  object|null
+	 */
+	#[\JetBrains\PhpStorm\ObjectShape([
+		'created'     => 'string|null',
+		'expiration'  => 'string|null',
+		'registrar'   => 'string|null',
+		'nameservers' => 'string[]|null',
+	])]
+	public function getWhoIsInformation(int $timeout = 3): ?object
+	{
+		/** @var \Akeeba\Panopticon\Container $container */
+		$container          = $this->getContainer();
+		$pool               = $container->cacheFactory->pool('whois');
+		$callbackController = new CallbackController(
+			$container,
+			$pool
+		);
+		$cacheKey           = hash(
+			'sha1',
+			"whois-{$this->getId()}-{$this->getBaseUrl()}"
+		);
+
+		return $callbackController
+			       ->get(
+				       function ($timeout) {
+					       // Get the hostname and port from the URL
+					       try
+					       {
+						       // This gets the domain.tld for the site; very important when we're given a subdomain.
+						       $hostname           = Uri::getInstance($this->getBaseUrl())->getHost();
+						       $parts              = explode('.', $hostname);
+						       $parts              = array_slice($parts, -2);
+						       $applicableHostname = implode('.', $parts);
+						       $info               = WhoisFactory::get()
+							       ->createWhois(new CurlLoader($timeout))
+							       ->loadDomainInfo($applicableHostname);
+					       }
+					       catch (Exception)
+					       {
+						       return null;
+					       }
+
+					       if (empty($info))
+					       {
+						       return null;
+					       }
+
+					       return (object) [
+						       'domain'      => $info->domainName,
+						       'created'     => $info->creationDate,
+						       'expiration'  => $info->expirationDate,
+						       'registrar'   => $info->registrar,
+						       'nameservers' => $info->nameServers,
+					       ];
+				       },
+				       [$timeout],
+				       $cacheKey,
+				       86400
+			       );
+	}
+
+	public function getDomainValidityStatus(): int
+	{
+		$created = $this->getConfig()->get('whois.created', null);
+		$expires = $this->getConfig()->get('whois.expiration', null);
+
+		try
+		{
+			$created = empty($created) ? null : new DateTime('@' . $created);
+		}
+		catch (\Throwable)
+		{
+			$created = null;
+		}
+
+		try
+		{
+			$expires = empty($expires) ? null : new DateTime('@' . $expires);
+		}
+		catch (\Throwable)
+		{
+			$expires = null;
+		}
+
+		// No valid Created or Expires date: -1 (unknown state)
+		if (empty($created) && empty($expires))
+		{
+			return -1;
+		}
+
+		$warning  = $this->getConfig()->get('config.domain.warning', 180);
+		$now      = new DateTime();
+		$warnDate = $warning > 0
+			? (new DateTime())->add(new \DateInterval(sprintf('P%sD', $warning)))
+			: $now;
+
+		// Both Created and Expires defined, both within range: 0 (valid)
+		if (!empty($created) && !empty($expires) && $created <= $now && $expires >= $now && $expires > $warnDate)
+		{
+			return 0;
+		}
+
+		// Only Created defined and is valid: 0 (valid)
+		if (!empty($created) && empty($expires) && $created <= $now)
+		{
+			return 0;
+		}
+
+		// Only Expires defined and is valid: 0 (valid)
+		if (empty($created) && !empty($expires) && $expires >= $now && $expires > $warnDate)
+		{
+			return 0;
+		}
+
+		// Created is defined but invalid: 1 (too soon)
+		if (!empty($created) && $created > $now)
+		{
+			return 1;
+		}
+
+		// Too close to the expiration date: 2 (expiration warning)
+		if ($warning > 0 && !empty($expires) && $expires >= $now && $expires <= $warnDate)
+		{
+			return 2;
+		}
+
+		// Expires is defined but invalid: 3 (expired)
+		if (!empty($expires) && $expires < $now)
+		{
+			return 3;
+		}
+
+		// No idea WTF is going on: -1
+		return -1;
 	}
 
 	/**
@@ -1741,22 +1892,47 @@ class Site extends DataModel
 		$uri->setFragment('');
 		$path = rtrim($uri->getPath(), '/');
 
-		if (!str_ends_with($path, '/panopticon_api'))
+		switch ($this->cmsType())
 		{
-			if (str_ends_with($path, '/api/index.php'))
-			{
-				$path = substr($path, 0, -10);
-			}
+			case CMSType::JOOMLA:
+				if (!str_ends_with($path, '/panopticon_api'))
+				{
+					if (str_ends_with($path, '/api/index.php'))
+					{
+						$path = substr($path, 0, -10);
+					}
 
-			if (str_contains($path, '/api/'))
-			{
-				$path = substr($path, 0, strrpos($path, '/api/')) . '/api';
-			}
+					if (str_contains($path, '/api/'))
+					{
+						$path = substr($path, 0, strrpos($path, '/api/')) . '/api';
+					}
 
-			if (!str_ends_with($path, '/api'))
-			{
-				$path .= '/api';
-			}
+					if (!str_ends_with($path, '/api'))
+					{
+						$path .= '/api';
+					}
+				}
+				break;
+
+			case CMSType::WORDPRESS:
+				$path = rtrim($path, '/');
+
+				if (!str_ends_with($path, '/wp-json'))
+				{
+					$path .= '/wp-json';
+				}
+
+				/**
+				 * Explanation: A user accidentally selects Joomla!, pastes the API info, realises their mistake,
+				 * switches the type to WordPress but forgets to paste the API URL again. The Joomla! API code converted
+				 * <URL>/wp-json to <URL>/wp-json/api, and the if-block right above this comment converted *that* to
+				 * <URL>/wp-json/api/wp-json. We catch that, removing the /api/wp-json part.
+				 */
+				if (str_ends_with($path, '/wp-json/api/wp-json'))
+				{
+					$path = substr($path, 0, -12);
+				}
+				break;
 		}
 
 		$uri->setPath($path);

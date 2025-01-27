@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -14,7 +14,6 @@ use Akeeba\Panopticon\Controller\Trait\ACLTrait;
 use Akeeba\Panopticon\Library\Task\TasksPausedTrait;
 use Akeeba\Panopticon\Model\Main as MainModel;
 use Awf\Container\Container;
-use Awf\Date\Date;
 use Awf\Document\Json;
 use Awf\Mvc\Controller;
 
@@ -56,6 +55,25 @@ class Main extends Controller
 		$app->close();
 	}
 
+	public function switchLanguage()
+	{
+		$lang = $this->input->get->getCmd('lang', 'en-GB');
+
+		if (isset($lang))
+		{
+			$this->getContainer()->segment->set('panopticon.forced_language', $lang ?: null);
+		}
+
+		if ($customURL = $this->input->getBase64('returnurl', ''))
+		{
+			$customURL = base64_decode($customURL);
+		}
+
+		$this->setRedirect(
+			!empty($customURL) ? $customURL : $this->container->router->route('index.php')
+		);
+	}
+
 	public function onBeforeBrowse(): bool
 	{
 		return $this->onBeforeDefault();
@@ -85,7 +103,7 @@ class Main extends Controller
 		}
 
 		// Pass the Selfupdate model to the view
-		$view            = $this->getView();
+		$view = $this->getView();
 
 		$selfUpdateModel = $this->getModel('selfupdate');
 		$view->setModel('selfupdate', $selfUpdateModel);

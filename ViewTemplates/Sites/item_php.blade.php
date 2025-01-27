@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,9 +9,8 @@ defined('AKEEBA') || die;
 
 /** @var \Akeeba\Panopticon\View\Sites\Html $this */
 
-use Akeeba\Panopticon\Library\PhpVersion\PhpVersion;
+use Akeeba\Panopticon\Library\SoftwareVersions\PhpVersion;
 use Akeeba\Panopticon\Library\Version\Version;
-use Awf\Registry\Registry;
 
 $phpVersion = new PhpVersion();
 
@@ -25,7 +24,7 @@ $latestVersionInBranch   = $versionInfo?->latest;
 $minimumSupportedBranch  = $phpVersion?->getMinimumSupportedBranch();
 $isUnknown               = $versionInfo?->unknown;
 $isOutOfDate             = $versionInfo?->eol;
-$isLatestVersionInBranch = version_compare($php, $latestVersionInBranch, 'ge');
+$isLatestVersionInBranch = version_compare($php, $latestVersionInBranch ?? '0.0.0', 'ge');
 $isLatestBranch          = $phpBranch === $phpVersion->getLatestBranch();
 $isRecommendedBranch     = $phpBranch === $phpVersion->getRecommendedSupportedBranch();
 $isOldestBranch          = $phpBranch === $minimumSupportedBranch;
@@ -58,7 +57,16 @@ $hasError                = !empty(trim($this->siteConfig->get('core.lastErrorMes
         </div>
 
         {{-- PHP Status --}}
-        @if($isUnknown)
+        @if($php === '0.0.0' || $php === null)
+            <div class="alert alert-info">
+                <h3 class="alert-heading h5 m-0 mb-2">
+                    <span class="fa fa-question-circle" aria-hidden="true"></span>
+                    @lang('PANOPTICON_SITE_LBL_PHP_MISSING')
+                </h3>
+
+                @lang('PANOPTICON_SITE_LBL_PHP_MISSING_INFO')
+            </div>
+        @elseif($isUnknown)
             <div class="alert alert-info">
                 <h3 class="alert-heading h5 m-0 mb-2">
                     <span class="fa fa-question-circle" aria-hidden="true"></span>

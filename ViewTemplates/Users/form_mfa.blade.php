@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -24,6 +24,18 @@ $token = $container->session->getCsrfToken()->getValue();
             <span class="fa fa-user-lock" aria-hidden="true"></span>
             @lang('PANOPTICON_MFA_LBL_GUI_HEAD')
         </h3>
+
+        @if($this->collapseForMFA && !$this->mfaActive)
+            <div class="alert alert-warning">
+                <span class="fa fa-warning" aria-hidden="true"></span>
+                @lang('PANOPTICON_USERS_LBL_FORCED_MFA_NEEDED')
+            </div>
+        @elseif($this->collapseForMFA)
+            <div class="alert alert-info">
+                <span class="fa fa-info-circle" aria-hidden="true"></span>
+                @lang('PANOPTICON_USERS_LBL_FORCED_MFA_COMPLETE')
+            </div>
+        @endif
 
         {{-- What is this --}}
         <div class="form-text mb-2 p-2">
@@ -68,7 +80,7 @@ $token = $container->session->getCsrfToken()->getValue();
                     {{-- MFA method header --}}
                     <div class="d-flex flex-row gap-2 align-items-center mb-3">
                         <img src="{{ Uri::root() . $method['image'] }}" alt="{{{ $method['name'] }}}"
-                             class="img-fluid bg-light p-2 rounded-2" style="min-width: 3em; max-width: 7em">
+                             class="img-fluid bg-light p-2 rounded-2">
 
                         <h4 class="m-0 p-0 flex-grow-1 fs-5">
                         <span>

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -55,7 +55,7 @@ class Groups extends DataModel
 	 * @return  array
 	 * @since   1.0.5
 	 */
-	public function getGroupMap(): array
+	public function getGroupMap(bool $forEnabledSitesOnly = true): array
 	{
 		$db = $this->getDbo();
 
@@ -64,13 +64,15 @@ class Groups extends DataModel
 			->select(
 				$query->jsonExtract($db->quoteName('config'), '$.config.groups')
 			)
-			->from($db->quoteName('#__sites'))
-			->where(
-				[
-					$db->quoteName('enabled') . ' = 1',
-					$query->jsonExtract($db->quoteName('config'), '$.config.groups[0]') . ' IS NOT NULL',
-				]
-			);
+			->from($db->quoteName('#__sites'));
+
+		if ($forEnabledSitesOnly) {
+			$query->where($db->quoteName('enabled') . ' = 1');
+		}
+
+		$query->where(
+			$query->jsonExtract($db->quoteName('config'), '$.config.groups[0]') . ' IS NOT NULL'
+		);
 
 		$rawItems = $db->setQuery($query)->loadColumn() ?: [];
 

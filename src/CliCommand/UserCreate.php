@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -177,13 +177,21 @@ class UserCreate extends AbstractCommand
 		$user->setPassword($password);
 		$user->setPrivilege('panopticon.super', true);
 
-		$manager->saveUser($user);
+		if ($manager->saveUser($user))
+		{
+			$this->ioStyle->success(
+				sprintf('Successfully saved user %s.', $username)
+			);
 
-		$this->ioStyle->success(
-			sprintf('Successfully saved user %s.', $username)
+			return Command::SUCCESS;
+		}
+
+		$this->ioStyle->error(
+			sprintf('Could not save user %s.', $username)
 		);
 
-		return Command::SUCCESS;
+		return Command::FAILURE;
+
 	}
 
 	protected function configure()

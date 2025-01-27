@@ -1,9 +1,11 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
+
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 
 defined('AKEEBA') || die;
 
@@ -68,7 +70,7 @@ $returnUrl = $this->input->getBase64('returnurl', '');
                     class="nav-link" aria-selected="false"
                     data-bs-toggle="tab" role="tab"
                     data-bs-target="#siteTabContentUpdate" aria-controls="siteTabContentUpdate">
-                @lang('PANOPTICON_SITE_LBL_TAB_UPDATE')
+                @lang('PANOPTICON_SITE_LBL_TAB_UPDATE_GENERIC')
             </button>
         </li>
         <li class="nav-item" role="presentation">
@@ -76,7 +78,11 @@ $returnUrl = $this->input->getBase64('returnurl', '');
                     class="nav-link" aria-selected="false"
                     data-bs-toggle="tab" role="tab"
                     data-bs-target="#siteTabContentExtUpdate" aria-controls="siteTabContentExtUpdate">
-                @lang('PANOPTICON_SITE_LBL_TAB_EXTUPDATE')
+                @if ($this->item->cmsType() === CMSType::WORDPRESS)
+                    @lang('PANOPTICON_SITE_LBL_TAB_PLUGINS_AND_THEMES')
+                @else
+                    @lang('PANOPTICON_SITE_LBL_TAB_EXTUPDATE')
+                @endif
             </button>
         </li>
     </ul>
@@ -121,7 +127,7 @@ $returnUrl = $this->input->getBase64('returnurl', '');
     <input type="hidden" name="token" value="@token()">
     <input type="hidden" name="task" id="task" value="browse">
     @if (!empty($returnUrl))
-    <input type="hidden" name="returnurl" value="{{{ $returnUrl }}}">
+        <input type="hidden" name="returnurl" value="{{{ $returnUrl }}}">
     @endif
 
 </form>

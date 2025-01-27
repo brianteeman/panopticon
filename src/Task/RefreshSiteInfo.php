@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,20 +9,22 @@ namespace Akeeba\Panopticon\Task;
 
 defined('AKEEBA') || die;
 
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Task\AbstractCallback;
 use Akeeba\Panopticon\Library\Task\Attribute\AsTask;
 use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Task\Trait\ApiRequestTrait;
 use Akeeba\Panopticon\Task\Trait\JsonSanitizerTrait;
+use Akeeba\Panopticon\Task\Trait\SaveSiteTrait;
 use Awf\Registry\Registry;
 use Awf\Utils\ArrayHelper;
-use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Promise\PromiseInterface;
 use GuzzleHttp\Promise\Utils;
-use Psr\Cache\CacheException;
-use Psr\Cache\InvalidArgumentException;
 use Psr\Http\Message\ResponseInterface;
 use Throwable;
+use function call_user_func_array;
+use function call_user_func_array as call_user_func_array1;
 
 #[AsTask(
 	name: 'refreshsiteinfo',
@@ -32,6 +34,7 @@ class RefreshSiteInfo extends AbstractCallback
 {
 	use ApiRequestTrait;
 	use JsonSanitizerTrait;
+	use SaveSiteTrait;
 
 	public function __invoke(object $task, Registry $storage): int
 	{
@@ -156,6 +159,7 @@ class RefreshSiteInfo extends AbstractCallback
 		// For the reasoning of this code see https://dev.mysql.com/doc/refman/5.7/en/lock-tables.html
 		$db->setQuery('COMMIT')->execute();
 		$db->unlockTables();
+		$db->setQuery('SET autocommit = 1')->execute();
 
 		return $siteIDs;
 	}
@@ -169,8 +173,21 @@ class RefreshSiteInfo extends AbstractCallback
 			return;
 		}
 
+		/**
+		 * Set up an array of promises which will be resolved asynchronously.
+		 *
+		 * The idea is that each site is transformed to a Guzzle promise. Resolving the promise accesses the site's API
+		 * and runs any post-processing required to store various information in the database, in the format Panopticon
+		 * understands.
+		 *
+		 * Guzzle will execute the various requests concurrently, running the promise then() handlers asynchronously.
+		 * This is substantialyl faster than executing requests serially. Essentially, we get to do productive work
+		 * while the network stack is twiddling its thumbs waiting for remove servers' replies.
+		 *
+		 * @see https://docs.guzzlephp.org/en/stable/quickstart.html#async-requests
+		 * @see https://docs.guzzlephp.org/en/stable/request-options.html
+		 */
 		$httpClient = $this->container->httpFactory->makeClient(cache: false);
-
 		$promises = array_map(
 			function (int $id) use ($httpClient) {
 				$site = new Site($this->container);
@@ -189,43 +206,109 @@ class RefreshSiteInfo extends AbstractCallback
 					$site->id, $site->name
 				));
 
-				[$url, $options] = $this->getRequestOptions($site, '/index.php/v1/panopticon/core/update?force=1');
+				// Get the correct promise by CMS type
+				$promise = match ($site->cmsType())
+				{
+					CMSType::JOOMLA => $this->promisePostProcJoomla(
+						call_user_func_array(
+							[$httpClient, 'getAsync'],
+							$this->getRequestOptions($site, '/index.php/v1/panopticon/core/update?force=1')
+						),
+						$site
+					),
+					CMSType::WORDPRESS => $this->promisePostProcWordPress(
+						call_user_func_array1(
+							[$httpClient, 'getAsync'],
+							$this->getRequestOptions($site, '/v1/panopticon/core/update?force=1')
+						),
+						$site
+					),
+					default => null
+				};
 
-				return $httpClient
-					// See https://docs.guzzlephp.org/en/stable/quickstart.html#async-requests and https://docs.guzzlephp.org/en/stable/request-options.html
-					->getAsync($url, $options)
-					->then(
-						function (ResponseInterface $response) use ($site) {
-							try
-							{
-								$rawData = $this->sanitizeJson($response->getBody()->getContents());
-								$document = @json_decode($rawData);
-							}
-							catch (\Exception $e)
-							{
-								$document = null;
-							}
+				// Handle unknown CMS type (in this case $promise is NULL)
+				if (!$promise instanceof PromiseInterface)
+				{
+					$this->logger->notice(
+						sprintf(
+							'Unknown CMS type \'%s\' for site #%d (%s)',
+							$site->cmsType()->value ?? '(unknown)',
+							$site->id,
+							$site->name
+						)
+					);
 
-							$attributes = $document?->data?->attributes;
+					return null;
+				}
 
-							if (empty($attributes))
-							{
-								$this->logger->notice(sprintf(
-									'Could not retrieve information for site #%d (%s). Invalid data returned from API call.',
-									$site->id, $site->name
-								));
+				// Also get the favicon of the site
+				$promise = $this->promisePostProcGetFavicon($promise, $site);
 
-								return $response;
-							}
+				return $promise;
+			},
+			$siteIDs
+		);
 
-							$this->logger->debug(
-								sprintf(
-									'Retrieved information for site #%d (%s).',
-									$site->id,
-									$site->name
-								)
-							);
+		// Remove NULL items (invalid sites)
+		$promises = array_filter($promises);
 
+		// Do I still have any sites to process?
+		if (empty($promises))
+		{
+			return;
+		}
+
+		// Wait until all promises are resolved
+		Utils::settle($promises)->wait(true);
+	}
+
+	/**
+	 * Update the promise to post-process a Joomla site's successful API result.
+	 *
+	 * @param   PromiseInterface  $promise  The Guzzle promise we'll be attaching to.
+	 * @param   Site              $site     The site object instance.
+	 *
+	 * @return  PromiseInterface  The updated Guzzle promise instance
+	 */
+	private function promisePostProcJoomla(PromiseInterface $promise, Site $site): PromiseInterface
+	{
+		return $promise
+			->then(
+				function (ResponseInterface $response) use ($site) {
+					try
+					{
+						$rawData = $this->sanitizeJson($response->getBody()->getContents());
+						$document = @json_decode($rawData);
+					}
+					catch (\Exception $e)
+					{
+						$document = null;
+					}
+
+					$attributes = $document?->data?->attributes;
+
+					if (empty($attributes))
+					{
+						$this->logger->notice(sprintf(
+							'Could not retrieve information for Joomla! site #%d (%s). Invalid data returned from API call.',
+							$site->id, $site->name
+						));
+
+						return $response;
+					}
+
+					$this->logger->debug(
+						sprintf(
+							'Retrieved information for Joomla! site #%d (%s).',
+							$site->id,
+							$site->name
+						)
+					);
+
+					$this->saveSite(
+						$site,
+						function (Site $site) use ($rawData, $document, $attributes)
+						{
 							$config = $site?->getConfig() ?? new Registry();
 
 							$config->set('core.current.version', $attributes->current);
@@ -297,97 +380,221 @@ class RefreshSiteInfo extends AbstractCallback
 							// Retrieve the SSL / TLS certificate information
 							$config->set('ssl', $site->getCertificateInformation());
 
+							// Retrieve the WHOIS information
+							$config->set('whois', $site->getWhoIsInformation());
+
 							// Latest backup information
 							if ($site->hasAkeebaBackup())
 							{
 								$config->set('akeebabackup.latest', $this->getLatestBackup($site));
 							}
 
-							// Save the configuration (three tries)
-							$retry = -1;
+							$site->config = $config;
+						}
+					);
 
-							do
-							{
-								try
-								{
-									$retry++;
+					return $response;
+				},
+				function (Throwable $e) use ($site) {
+					$this->logger->error(sprintf(
+						'Could not retrieve information for Joomla! site #%d (%s). The server replied with the following error: %s',
+						$site->id, $site->name, $e->getMessage()
+					));
 
-									$site->save([
-										'config' => $config->toString(),
-									]);
-
-									break;
-								}
-								catch (\Exception $e)
-								{
-									if ($retry >= 3)
-									{
-										$this->logger->error(sprintf(
-											'Error saving the information for site #%d (%s) upon successful API call: %s',
-											$site->id, $site->name, $e->getMessage()
-										));
-
-										break;
-									}
-
-									$this->logger->warning(sprintf(
-										'Failed saving the information for site #%d (%s) upon successful API call (will retry): %s',
-										$site->id, $site->name, $e->getMessage()
-									));
-
-									sleep($retry);
-								}
-							} while ($retry < 3);
-
-							return $response;
-						},
-						function (RequestException $e) use ($site) {
-							$this->logger->error(sprintf(
-								'Could not retrieve information for site #%d (%s). The server replied with the following error: %s',
-								$site->id, $site->name, $e->getMessage()
-							));
-
-							// Save the last error message
+					// Save the last error message
+					$this->saveSite(
+						$site,
+						function (Site $site) use ($e)
+						{
 							$config = $site?->getConfig() ?? new Registry();
 
 							$config->set('core.lastErrorMessage', $e->getMessage());
 
-							try
-							{
-								$site->save(
-									[
-										'config' => $config->toString(),
-									]
-								);
-							}
-							catch (\Exception $e)
-							{
-								$this->logger->error(sprintf(
-									'Error saving the information for site #%d (%s) upon failed API call: %s',
-									$site->id, $site->name, $e->getMessage()
-								));
-							}
-						}
-					)
-					->then(
-						function(ResponseInterface $response) use ($site) {
-							$site->getFavicon(asDataUrl: true);
-
-							return $response;
+							$site->config = $config;
 						}
 					);
-			},
-			$siteIDs
-		);
 
-		$promises = array_filter($promises);
+					throw $e;
+				}
+			);
+	}
 
-		if (empty($promises))
-		{
-			return;
-		}
+	/**
+	 * Update the promise to post-process a WordPress site's successful API result.
+	 *
+	 * @param   PromiseInterface  $promise  The Guzzle promise we'll be attaching to.
+	 * @param   Site              $site     The site object instance.
+	 *
+	 * @return  PromiseInterface  The updated Guzzle promise instance
+	 */
+	private function promisePostProcWordPress(PromiseInterface $promise, Site $site): PromiseInterface
+	{
+		return $promise
+			->then(
+				function (ResponseInterface $response) use ($site) {
+					try
+					{
+						$rawData = $this->sanitizeJson($response->getBody()->getContents());
+						$document = @json_decode($rawData);
+					}
+					catch (\Exception $e)
+					{
+						$document = null;
+					}
 
-		Utils::settle($promises)->wait(true);
+					if (empty($document))
+					{
+						$this->logger->notice(sprintf(
+							'Could not retrieve information for WordPress site #%d (%s). Invalid data returned from API call.',
+							$site->id, $site->name
+						));
+
+						return $response;
+					}
+
+					$this->logger->debug(
+						sprintf(
+							'Retrieved information for WordPress site #%d (%s).',
+							$site->id,
+							$site->name
+						)
+					);
+
+					$this->saveSite(
+						$site,
+						function (Site $site) use ($rawData, $document)
+						{
+							$config = $site?->getConfig() ?? new Registry();
+
+							// The following properties are not available under WordPress, therefore faked
+							$config->set('core.extensionAvailable', true);
+							$config->set('core.updateSiteAvailable', true);
+							$config->set('core.maxCacheHours', 6);
+							$config->set('core.overridesChanged', null);
+
+							// Get properties from the API response
+							$config->set('core.current.version', $document->current);
+							$config->set('core.current.stability', $document->currentStability);
+							$config->set('core.latest.version', $document->latest ?? $document->current);
+							$config->set('core.latest.stability', $document->latestStability ?? $document->currentStability);
+							$config->set('core.php', $document->phpVersion ?? null);
+							$config->set('core.minimumStability', $document->minimumStability ?? 'stable');
+							$config->set('core.lastUpdateTimestamp', $document->lastUpdateTimestamp ?? time());
+							$config->set('core.lastAttempt', time());
+							$config->set('core.serverInfo', $document->serverInfo ?? null);
+
+							$stabilityCheck = match ($config->get('core.minimumStability', 'stable'))
+							{
+								default => in_array($config->get('core.latest.stability', 'stable'), ['stable']),
+								'rc' => in_array($config->get('core.latest.stability', 'stable'), [
+									'stable', 'rc',
+								]),
+								'beta' => in_array($config->get('core.latest.stability', 'stable'), [
+									'stable', 'rc', 'beta',
+								]),
+								'alpha' => in_array($config->get('core.latest.stability', 'stable'), [
+									'stable', 'rc', 'beta', 'alpha',
+								]),
+								'dev' => in_array($config->get('core.latest.stability', 'stable'), [
+									'stable', 'rc', 'beta', 'alpha', 'dev',
+								]),
+							};
+
+							$config->set(
+								'core.canUpgrade',
+								version_compare(
+									$config->get('core.current.version'),
+									$config->get('core.latest.version'),
+									'lt'
+								)
+								&& $stabilityCheck
+								&& $config->get('core.extensionAvailable')
+								&& $config->get('core.updateSiteAvailable')
+							);
+
+							$panopticon = $document->panopticon ?? null;
+
+							if (!empty($panopticon) && (is_object($panopticon) || is_array($panopticon)))
+							{
+								foreach ($panopticon as $k => $v)
+								{
+									$config->set('core.panopticon.' . $k, $v);
+								}
+							}
+
+							$admintools = $document->admintools ?? null;
+
+							if (!empty($admintools) && (is_object($admintools) || is_array($admintools)))
+							{
+								foreach ($admintools as $k => $v)
+								{
+									$config->set('core.admintools.' . $k, $v);
+								}
+							}
+
+							// Clear the last error message
+							$config->set('core.lastErrorMessage', null);
+
+							// Retrieve the SSL / TLS certificate information
+							$config->set('ssl', $site->getCertificateInformation());
+
+							// Retrieve the WHOIS information
+							$config->set('whois', $site->getWhoIsInformation());
+
+							// Latest backup information
+							if ($site->hasAkeebaBackup())
+							{
+								$config->set('akeebabackup.latest', $this->getLatestBackup($site));
+							}
+
+							$site->config = $config;
+						}
+					);
+
+					return $response;
+				},
+				function (Throwable $e) use ($site) {
+					$this->logger->error(sprintf(
+						'Could not retrieve information for WordPress site #%d (%s). The server replied with the following error: %s',
+						$site->id, $site->name, $e->getMessage()
+					));
+
+					// Save the last error message
+					$this->saveSite(
+						$site,
+						function (Site $site) use ($e)
+						{
+							$config = $site?->getConfig() ?? new Registry();
+
+							$config->set('core.lastErrorMessage', $e->getMessage());
+
+							$site->config = $config;
+						}
+					);
+
+					throw $e;
+				}
+			);
+	}
+
+	/**
+	 * Update the promise to also retrieve the favicon of the site upon successful API access.
+	 *
+	 * @param   PromiseInterface  $promise  The Guzzle promise we'll be attaching to.
+	 * @param   Site              $site     The site object instance.
+	 *
+	 * @return  PromiseInterface  The updated Guzzle promise instance
+	 */
+	private function promisePostProcGetFavicon(PromiseInterface $promise, Site $site): PromiseInterface
+	{
+		return $promise
+			->then(
+				function(ResponseInterface $response) use ($site) {
+					$site->getFavicon(asDataUrl: true);
+
+					return $response;
+				}
+			);
 	}
 
 	/**

@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -168,10 +168,12 @@ class Backuptasks extends DataController
 	protected function onBeforeApplySave(array &$data): void
 	{
 		// Construct the JSON params from $data['params']
-		$params                = $data['params'] ?? [];
-		$params['profile_id']  ??= 1;
-		$params['description'] ??= null;
-		$data['params']        = json_encode($params);
+		$params                  = $data['params'] ?? [];
+		$params['profile_id']    ??= 1;
+		$params['description']   ??= null;
+		$params['email_success'] ??= 0;
+		$params['email_fail']    ??= 0;
+		$data['params']          = json_encode($params);
 
 		// Construct the cron_expression from $data['cron']
 		$cron = $data['cron'];

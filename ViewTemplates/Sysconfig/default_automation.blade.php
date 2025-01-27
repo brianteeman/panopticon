@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -85,6 +85,23 @@ $config = $this->container->appConfig;
                     <div class="input-group-text">
                         %
                     </div>
+                </div>
+            </div>
+        </div>
+
+        {{--accurate_php_cli--}}
+        <div class="row mb-3">
+            <div class="col-sm-9 offset-sm-3">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" name="options[accurate_php_cli]" id="accurate_php_cli" value="1"
+                            {{ $config->get('accurate_php_cli', 1) ? 'checked' : '' }}
+                    >
+                    <label class="form-check-label" for="accurate_php_cli">
+                        @lang('PANOPTICON_SYSCONFIG_LBL_FIELD_ACCURATE_PHP_CLI')
+                    </label>
+                </div>
+                <div class="form-text">
+                    @lang('PANOPTICON_SYSCONFIG_LBL_FIELD_ACCURATE_PHP_CLI_HELP')
                 </div>
             </div>
         </div>

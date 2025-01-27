@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,33 +11,52 @@ defined('AKEEBA') || die;
 
 /**
  * @var \Akeeba\Panopticon\View\Updatesummarytasks\Html $this
- * @var \Akeeba\Panopticon\Model\Task            $model
+ * @var \Akeeba\Panopticon\Model\Task                   $model
  */
-$model  = $this->getModel();
-$token  = $this->container->session->getCsrfToken()->getValue();
-$params = is_object($model->params) ? $model->params : new Registry($model->params);
+$model   = $this->getModel();
+$token   = $this->container->session->getCsrfToken()->getValue();
+$params  = is_object($model->params) ? $model->params : new Registry($model->params);
+$favIcon = $this->site->getFavicon(asDataUrl: true, onlyIfCached: true);
 
 try
 {
 	$cronExpression = new \Cron\CronExpression($model->cron_expression ?? '@daily');
-	$ceMinutes = $cronExpression->getExpression(0);
-	$ceHours = $cronExpression->getExpression(1);
-	$ceDom = $cronExpression->getExpression(2);
-	$ceMonth = $cronExpression->getExpression(3);
-	$ceDow = $cronExpression->getExpression(4);
+	$ceMinutes      = $cronExpression->getExpression(0);
+	$ceHours        = $cronExpression->getExpression(1);
+	$ceDom          = $cronExpression->getExpression(2);
+	$ceMonth        = $cronExpression->getExpression(3);
+	$ceDow          = $cronExpression->getExpression(4);
 }
 catch (InvalidArgumentException $e)
 {
 	[$ceMinutes, $ceHours, $ceDom, $ceMonth, $ceDow] = explode(' ', $model->cron_expression);
 }
+
+$js = <<< JS
+window.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.js-choice').forEach((element) => {
+        new Choices(element, {allowHTML: false, removeItemButton: true, placeholder: true, placeholderValue: ""});
+    });
+});
+
+JS;
+
 ?>
+@js('choices/choices.min.js', $this->getContainer()->application)
+@inlinejs($js)
 
 <form action="@route('index.php?view=updatesummarytasks')"
       method="post" name="adminForm" id="adminForm">
 
-    <h3 class="text-body-secondary border-bottom border-2 border-info-subtle">
-        <span class="text-body-tertiary me-2">#{{ (int) $this->site->id }}</span>
-        {{ $this->site->name }}
+    <h3 class="mt-2 pb-1 border-bottom border-3 border-primary-subtle d-flex flex-row align-items-center gap-2">
+        <span class="text-muted fw-light fs-4">#{{ (int) $this->site->id }}</span>
+        @if($favIcon)
+            <img src="{{{ $favIcon }}}"
+                 style="max-width: 1em; max-height: 1em; aspect-ratio: 1.0"
+                 class="mx-1 p-1 border rounded"
+                 alt="">
+        @endif
+        <span class="flex-grow-1">{{{ $this->site->name }}}</span>
     </h3>
 
     <h4>@lang('PANOPTICON_UPDATESUMMARYTASKS_LBL_OPTIONS')</h4>
@@ -97,6 +116,31 @@ catch (InvalidArgumentException $e)
                 <label class="form-check-label" for="enabled">
                     @lang('PANOPTICON_LBL_TABLE_HEAD_ENABLED')
                 </label>
+            </div>
+        </div>
+    </div>
+
+
+    <h4>@lang('PANOPTICON_UPDATESUMMARYTASKS_LBL_RECIPIENTS')</h4>
+
+    <div class="row mb-3">
+        <label for="groups" class="col-sm-3 col-form-label">
+            @lang('PANOPTICON_UPDATESUMMARYTASKS_LBL_EMAIL_GROUPS')
+        </label>
+        <div class="col-sm-9">
+            {{ $this->container->html->select->genericList(
+                data: $this->getModel()->getGroupsForSelect(),
+                name: 'params[email_groups][]',
+                attribs: [
+                    'class' => 'form-select js-choice',
+                    'multiple' => 'multiple',
+                ],
+                selected: $params->get('email_groups', []),
+                idTag: 'email_groups'
+            ) }}
+
+            <div class="form-text">
+                @lang('PANOPTICON_UPDATESUMMARYTASKS_LBL_EMAIL_GROUPS_HELP')
             </div>
         </div>
     </div>
@@ -196,9 +240,9 @@ catch (InvalidArgumentException $e)
             <div class="col-sm-9">
                 {{ $this->container->html->select->genericList(
                     [
-						'' => 'PANOPTICON_BACKUPTASKS_LBL_FIELD_RUN_ONCE_NONE',
-						'disable' => 'PANOPTICON_BACKUPTASKS_LBL_FIELD_RUN_ONCE_DISABLE',
-						'delete' => 'PANOPTICON_BACKUPTASKS_LBL_FIELD_RUN_ONCE_DELETE',
+                        '' => 'PANOPTICON_BACKUPTASKS_LBL_FIELD_RUN_ONCE_NONE',
+                        'disable' => 'PANOPTICON_BACKUPTASKS_LBL_FIELD_RUN_ONCE_DISABLE',
+                        'delete' => 'PANOPTICON_BACKUPTASKS_LBL_FIELD_RUN_ONCE_DELETE',
                     ],
                     'params[run_once]',
                     [

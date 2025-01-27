@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -15,6 +15,7 @@ use Akeeba\Panopticon\Library\Task\Status;
 use Akeeba\Panopticon\Model\Reports;
 use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Task\Trait\EmailSendingTrait;
+use Akeeba\Panopticon\Task\Trait\SaveSiteTrait;
 use Awf\Registry\Registry;
 
 #[AsTask(
@@ -24,6 +25,7 @@ use Awf\Registry\Registry;
 class AkeebaBackup extends AbstractCallback
 {
 	use EmailSendingTrait;
+	use SaveSiteTrait;
 
 	public function __invoke(object $task, Registry $storage): int
 	{
@@ -167,7 +169,8 @@ class AkeebaBackup extends AbstractCallback
 					'BACKUP_RECORD' => $backupRecordId,
 					'ARCHIVE_NAME'  => $archive,
 					'MESSAGE'       => $errorMessage,
-				]
+				],
+				$params
 			);
 
 			$this->backupRecordsCacheBuster($site);
@@ -241,7 +244,8 @@ class AkeebaBackup extends AbstractCallback
 					'BACKUPID'      => $backupId,
 					'BACKUP_RECORD' => $backupRecordId,
 					'ARCHIVE_NAME'  => $archive,
-				]
+				],
+				$params
 			);
 		}
 		elseif (!empty($rawData?->Error))
@@ -285,7 +289,8 @@ class AkeebaBackup extends AbstractCallback
 					'BACKUP_RECORD' => $backupRecordId,
 					'ARCHIVE_NAME'  => $archive,
 					'MESSAGE'       => $rawData?->Error,
-				]
+				],
+				$params
 			);
 
 			$this->backupRecordsCacheBuster($site);
@@ -304,8 +309,29 @@ class AkeebaBackup extends AbstractCallback
 		return $rawData?->HasRun ? Status::WILL_RESUME->value : Status::OK->value;
 	}
 
-	private function sendEmail(string $type, Site $site, array $vars = []): void
+	private function sendEmail(string $type, Site $site, array $vars, Registry $params): void
 	{
+		// Am I supposed to send the email?
+		$checkKey = match ($type)
+		{
+			'akeebabackup_success' => 'email_success',
+			'akeebabackup_fail' => 'email_fail',
+			default => 'email_default',
+		};
+
+		$whichType = match($type) {
+			'akeebabackup_success' => 'Successful backup',
+			default => 'Failed backup'
+		};
+
+		if (!$params->get($checkKey, 1))
+		{
+			$this->logger->debug("Will NOT send email $type ($whichType) -- This email type has been disabled in the site's options in Panopticon");
+
+			return;
+		}
+
+		// Add the basic site variables to the email
 		$vars = array_merge(
 			[
 				'SITE_NAME' => $site->name,
@@ -314,10 +340,13 @@ class AkeebaBackup extends AbstractCallback
 			], $vars
 		);
 
+		// Enqueue the email
 		$data = new Registry();
 		$data->set('template', $type);
 		$data->set('email_variables', $vars);
 		$data->set('permissions', ['panopticon.admin', 'panopticon.editown']);
+
+		$this->logger->debug("Sending email $type ($whichType)", $data->toArray());
 
 		$this->enqueueEmail($data, $site->getId(), 'now');
 	}
@@ -347,45 +376,14 @@ class AkeebaBackup extends AbstractCallback
 	 */
 	private function reloadLatestBackupRecord(Site $site): void
 	{
-		$config = $site->getConfig();
-		$config->set('akeebabackup.latest', $this->getLatestBackup($site));
-		$site->config = $config;
-
-		// Save the configuration (three tries)
-		$retry = -1;
-
-		do
-		{
-			try
-			{
-				$retry++;
-
-				$site->save([
-					'config' => $config->toString(),
-				]);
-
-				break;
+		$this->saveSite(
+			$site,
+			function (Site $site) {
+				$config = $site->getConfig();
+				$config->set('akeebabackup.latest', $this->getLatestBackup($site));
+				$site->config = $config;
 			}
-			catch (\Exception $e)
-			{
-				if ($retry >= 3)
-				{
-					$this->logger->error(sprintf(
-						'Error saving the information for site #%d (%s) after backup attempt: %s',
-						$site->id, $site->name, $e->getMessage()
-					));
-
-					break;
-				}
-
-				$this->logger->warning(sprintf(
-					'Failed saving the information for site #%d (%s) after backup attempt (will retry): %s',
-					$site->id, $site->name, $e->getMessage()
-				));
-
-				sleep($retry);
-			}
-		} while ($retry < 3);
+		);
 	}
 
 	/**

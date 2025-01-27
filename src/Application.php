@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -13,6 +13,7 @@ use Akeeba\Panopticon\Application\BootstrapUtilities;
 use Akeeba\Panopticon\Library\MultiFactorAuth\MFATrait;
 use Akeeba\Panopticon\Library\MultiFactorAuth\Plugin\PassKeys;
 use Akeeba\Panopticon\Library\MultiFactorAuth\Plugin\TOTP;
+use Akeeba\Panopticon\Library\Passkey\PasskeyTrait;
 use Akeeba\Panopticon\Library\Version\Version;
 use Awf\Application\Application as AWFApplication;
 use Awf\Application\TransparentAuthentication;
@@ -20,15 +21,17 @@ use Awf\Document\Menu\Item;
 use Awf\Uri\Uri;
 use Awf\Utils\Ip;
 use Exception;
+use function array_map;
 
 class Application extends AWFApplication
 {
 	use MFATrait;
+	use PasskeyTrait;
 
 	/**
 	 * List of view names we're allowed to access directly, without a login, and without redirection to the setup view
 	 */
-	private const NO_LOGIN_VIEWS = ['check', 'cron', 'login', 'setup'];
+	private const NO_LOGIN_VIEWS = ['check', 'cron', 'login', 'setup', 'passkeys'];
 
 	/**
 	 * Main menu structure
@@ -69,7 +72,6 @@ class Application extends AWFApplication
 					'permissions' => [],
 					'icon'        => 'fa fa-fw fa-table',
 				],
-
 			],
 		],
 		[
@@ -150,6 +152,15 @@ class Application extends AWFApplication
 					'icon'        => 'fa fa-fw fa-database',
 				],
 			],
+		],
+		[
+			'url'            => '#!hiddenTitle!',
+			'permissions'    => [],
+			'name'           => 'language_menu',
+			'icon'           => 'fa fa-fw fa-language',
+			'iconHandler'    => [self::class, 'getCurrentLanguageIcon'],
+			'title'          => 'PANOPTICON_APP_LBL_LANGUAGE',
+			'submenuHandler' => [self::class, 'getLanguageSubmenu'],
 		],
 		[
 			'url'          => null,
@@ -237,6 +248,110 @@ class Application extends AWFApplication
 		);
 	}
 
+	public static function getCurrentLanguageIcon(): string
+	{
+		$languages       = Factory::getContainer()->helper->setup->getLanguageOptions(false);
+		$currentLanguage = self::getCurrentLanguage();
+
+		if (!empty($currentLanguage) && isset($languages[$currentLanguage]))
+		{
+			$langName = $languages[$currentLanguage];
+			[$icon,] = explode('&nbsp;', $langName);
+
+			return $icon;
+		}
+
+		return 'fa fa-fw fa-language';
+	}
+
+	public static function getLanguageSubmenu(): array
+	{
+		$languages       = Factory::getContainer()->helper->setup->getLanguageOptions(false);
+		$items           = [];
+		$currentLanguage = self::getCurrentLanguage();
+		$langUrl         = fn($langCode) => Factory::getContainer()->router->route(
+			sprintf(
+				'index.php?view=main&task=switchLanguage&lang=%s&returnurl=%s',
+				$langCode,
+				base64_encode(Uri::getInstance()->toString())
+			)
+		);
+
+		// Add an icon for the default language
+		$items[] = [
+			'url'         => $langUrl(''),
+			'permissions' => [],
+			'name'        => 'set_lang_default',
+			'icon'        => 'fa fa-fw fa-language',
+			'title'       => 'PANOPTICON_USERS_LBL_FIELD_FIELD_LANGUAGE_AUTO',
+		];
+
+		// Push the current language up top
+		if (!empty($currentLanguage) && isset($languages[$currentLanguage]))
+		{
+			$langName = $languages[$currentLanguage];
+			unset($languages[$currentLanguage]);
+
+			$items[] = [
+				'url'         => $langUrl($currentLanguage) . '#!disabled!',
+				'permissions' => [],
+				'name'        => 'set_lang_' . $currentLanguage,
+				'title'       => $langName,
+			];
+		}
+
+		// Add divider
+		$items[] = [
+			'url'         => null,
+			'name'        => 'lang_separator01',
+			'title'       => '---',
+			'permissions' => [],
+		];
+
+		// Sort the other languages
+		uasort(
+			$languages, function ($a, $b) {
+			[, $nameA] = explode('&nbsp;', $a);
+			[, $nameB] = explode('&nbsp;', $b);
+
+			return $nameA <=> $nameB;
+		}
+		);
+
+		// Add submenu items
+		foreach ($languages as $code => $langName)
+		{
+			$items[] = [
+				'url'         => $langUrl($code),
+				'permissions' => [],
+				'name'        => 'set_lang_' . $code,
+				'title'       => '<span lang="' . $code . '">' . $langName . '</span>',
+			];
+		}
+
+		return $items;
+	}
+
+	private static function getCurrentLanguage(bool $fallbackUser = false, bool $fallbackApp = false): string
+	{
+		$container      = Factory::getContainer();
+		$appLanguage    = $container->appConfig->get('language', 'en-GB');
+		$forcedLanguage = $container->segment->get('panopticon.forced_language', null);
+		$userLanguage   = $container->userManager->getUser()->getParameters()->get('language');
+
+		if ($forcedLanguage)
+		{
+			return $forcedLanguage;
+		}
+
+		if (!empty($userLanguage) && $fallbackUser)
+		{
+			return $userLanguage;
+		}
+
+		return $fallbackApp ? $appLanguage : '';
+	}
+
 	public function initialise()
 	{
 		// Set up the media query key
@@ -245,12 +360,24 @@ class Application extends AWFApplication
 		// HTTP 103 early hints
 		$this->preloadHints();
 
+		// Set up the session
+		$this->container->session->start();
+
 		// Apply a forced language – but only if there is no logged-in user, or they have no language preference.
 		$forcedLanguage = $this->getContainer()->segment->get('panopticon.forced_language', null);
 
-		if ($forcedLanguage && empty($this->getContainer()->userManager->getUser()->getParameters()->get('language')))
+		if ($forcedLanguage)
 		{
 			$this->getLanguage()->loadLanguage($forcedLanguage);
+		}
+		elseif ($this->getContainer()->userManager->getUser()->getId() > 0)
+		{
+			$this->getLanguage()->loadLanguage(
+				$this->getLanguage()->detectLanguage(
+					null,
+					$this->getContainer()->userManager->getUser()
+				)
+			);
 		}
 
 		// Will I have to redirect to the setup page?
@@ -260,7 +387,6 @@ class Application extends AWFApplication
 		$this->getContainer()->html->grid->setJavascriptPrefix('akeeba.System.');
 
 		// Initialisation
-		$this->discoverSessionSavePath();
 		$this->setTemplate('default');
 		$this->registerMultifactorAuthentication();
 
@@ -278,6 +404,8 @@ class Application extends AWFApplication
 
 			if (!$this->needsMFA())
 			{
+				$this->conditionalRedirectToCaptiveSetup();
+				$this->conditionalRedirectToPasskeySetup();
 				$this->conditionalRedirectToCronSetup();
 
 				if (
@@ -309,58 +437,13 @@ class Application extends AWFApplication
 		$this->initialiseMenu();
 	}
 
-	public function createOrUpdateSessionPath(string $path, bool $silent = true): void
-	{
-		try
-		{
-			$fs            = $this->container->fileSystem;
-			$protectFolder = false;
-
-			if (!@is_dir($path))
-			{
-				$fs->mkdir($path, 0777);
-			}
-			elseif (!is_writeable($path))
-			{
-				$fs->chmod($path, 0777);
-				$protectFolder = true;
-			}
-			else
-			{
-				if (!@file_exists($path . '/.htaccess'))
-				{
-					$protectFolder = true;
-				}
-
-				if (!@file_exists($path . '/web.config'))
-				{
-					$protectFolder = true;
-				}
-			}
-
-			if ($protectFolder)
-			{
-				$fs->copy($this->container->basePath . '/.htaccess', $path . '/.htaccess');
-				$fs->copy($this->container->basePath . '/web.config', $path . '/web.config');
-
-				$fs->chmod($path . '/.htaccess', 0644);
-				$fs->chmod($path . '/web.config', 0644);
-			}
-		}
-		catch (Exception $e)
-		{
-			if (!$silent)
-			{
-				throw $e;
-			}
-		}
-	}
-
-	private function initialiseMenu(array $items = self::MAIN_MENU, ?Item $parent = null): void
+	private function initialiseMenu(?array $items = null, ?Item $parent = null): void
 	{
 		$menu  = $this->getDocument()->getMenu();
 		$user  = $this->container->userManager->getUser();
 		$order = 0;
+
+		$items ??= array_map([$this, 'applyMenuItemHandlers'], self::MAIN_MENU);
 
 		foreach ($items as $params)
 		{
@@ -390,12 +473,17 @@ class Application extends AWFApplication
 
 			$order += 10;
 
+			$title = $params['title'] ?? sprintf('%s_%s_TITLE', $this->getName(), $params['view']);
+
+			if (str_starts_with(strtoupper($title), 'PANOPTICON_'))
+			{
+				$title = $this->getLanguage()->text($title);
+			}
+
 			$options = [
 				'show'         => $params['show'] ?? ['main'],
 				'name'         => $params['name'] ?? $params['view'],
-				'title'        => $this->getLanguage()->text(
-					$params['title'] ?? sprintf('%s_%s_TITLE', $this->getName(), $params['view'])
-				),
+				'title'        => $title,
 				'order'        => $params['order'] ?? $order,
 				'titleHandler' => $params['titleHandler'] ?? null,
 				'icon'         => $params['icon'] ?? null,
@@ -439,6 +527,36 @@ class Application extends AWFApplication
 		}
 	}
 
+	private function applyMenuItemHandlers(array $item): array
+	{
+		if (isset($item['iconHandler']))
+		{
+			$item['icon'] = is_callable($item['iconHandler'])
+				? call_user_func($item['iconHandler'])
+				:
+				($item['icon'] ?? '');
+
+			unset($item['iconHandler']);
+		}
+
+		if (isset($item['submenuHandler']))
+		{
+			$item['submenu'] = is_callable($item['submenuHandler'])
+				? call_user_func($item['submenuHandler'])
+				:
+				($item['submenu'] ?? '');
+
+			unset($item['submenuHandler']);
+		}
+
+		if (isset($item['submenu']) && is_array($item['submenu']) && !empty($item['submenu']))
+		{
+			$item['submenu'] = array_map([$this, 'applyMenuItemHandlers'], $item['submenu']);
+		}
+
+		return $item;
+	}
+
 	private function applySessionTimeout(): void
 	{
 		// Get the session timeout
@@ -477,11 +595,11 @@ class Application extends AWFApplication
 		}
 		elseif (function_exists('sha1'))
 		{
-			$sessionKey = sha1($uniqueData);
+			$sessionKey = hash('sha1', $uniqueData, false);
 		}
 		elseif (function_exists('md5'))
 		{
-			$sessionKey = md5($uniqueData);
+			$sessionKey = hash('md5', $uniqueData, false);
 		}
 		elseif (function_exists('crc32'))
 		{
@@ -534,18 +652,6 @@ class Application extends AWFApplication
 		else
 		{
 			$this->container->segment->set('session_timestamp', $now);
-		}
-	}
-
-	private function discoverSessionSavePath(): void
-	{
-		$sessionPath = $this->container->session->getSavePath();
-
-		if (!@is_dir($sessionPath) || !@is_writable($sessionPath))
-		{
-			$sessionPath = APATH_TMP . '/session';
-			$this->createOrUpdateSessionPath($sessionPath);
-			$this->container->session->setSavePath($sessionPath);
 		}
 	}
 
@@ -607,6 +713,7 @@ class Application extends AWFApplication
 	{
 		// Get the view. Necessary to go through $this->getContainer()->input as it may have already changed.
 		$view = $this->getContainer()->input->getCmd('view', '');
+		$task = $this->getContainer()->input->getCmd('task', '');
 
 		// Get the user manager
 		$manager = $this->container->userManager;
@@ -621,6 +728,14 @@ class Application extends AWFApplication
 
 				$this->getLanguage()->loadLanguage($lang ?: 'en-GB');
 			}
+		}
+
+		/**
+		 * Special case: password reset
+		 */
+		if ($view === 'users' && in_array($task, ['pwreset', 'confirmreset']))
+		{
+			return;
 		}
 
 		/**
@@ -662,13 +777,14 @@ class Application extends AWFApplication
 
 	private function setupMediaVersioning(): void
 	{
-		$this->getContainer()->mediaQueryKey = md5(microtime(false));
+		$this->getContainer()->mediaQueryKey = hash('md5', microtime(false));
 		$isDebug                             = !defined('AKEEBADEBUG');
 		$isDevelopment                       = Version::getInstance()->isDev();
 
 		if (!$isDebug && !$isDevelopment)
 		{
-			$this->getContainer()->mediaQueryKey = md5(
+			$this->getContainer()->mediaQueryKey = hash(
+				'md5',
 				__DIR__ . ':' . AKEEBA_PANOPTICON_VERSION . ':' . AKEEBA_PANOPTICON_DATE
 			);
 		}
@@ -703,7 +819,17 @@ class Application extends AWFApplication
 
 		// Do not redirect if we're in a view which is allowed to be accessed directly (check, cron, login, setup)
 		$view = $this->getContainer()->input->getCmd('view', '');
+		$task = $this->getContainer()->input->getCmd('task', '');
 
+		/**
+		 * Special case: password reset
+		 */
+		if ($view === 'users' && in_array($task, ['pwreset', 'confirmreset']))
+		{
+			return;
+		}
+
+		// Other views
 		if (in_array($view, self::NO_LOGIN_VIEWS))
 		{
 			return;
@@ -721,6 +847,42 @@ class Application extends AWFApplication
 		}
 
 		$captiveUrl = $this->container->router->route('index.php?view=captive');
+
+		$this->redirect($captiveUrl);
+	}
+
+	private function conditionalRedirectToCaptiveSetup(): void
+	{
+		if (!$this->needsMFAForcedSetup())
+		{
+			return;
+		}
+
+		$user       = $this->getContainer()->userManager->getUser();
+		$captiveUrl = $this->getContainer()->router->route(
+			sprintf(
+				"index.php?view=users&task=edit&id=%s&collapseForMFA=1",
+				$user->getId()
+			)
+		);
+
+		$this->redirect($captiveUrl);
+	}
+
+	private function conditionalRedirectToPasskeySetup(): void
+	{
+		if (!$this->needsPasskeyForcedSetup())
+		{
+			return;
+		}
+
+		$user       = $this->getContainer()->userManager->getUser();
+		$captiveUrl = $this->getContainer()->router->route(
+			sprintf(
+				"index.php?view=users&task=edit&id=%s&collapseForPasskey=1",
+				$user->getId()
+			)
+		);
 
 		$this->redirect($captiveUrl);
 	}
@@ -807,7 +969,8 @@ class Application extends AWFApplication
 				!str_contains($file, '.min.') && !(defined('AKEEBADEBUG') && AKEEBADEBUG)
 				&& (
 					str_ends_with($file, '.js') || str_ends_with($file, '.css')
-					|| str_contains($file, '.js?') || str_contains($file, '.css?')
+					|| str_contains($file, '.js?')
+					|| str_contains($file, '.css?')
 				)
 			)
 			{

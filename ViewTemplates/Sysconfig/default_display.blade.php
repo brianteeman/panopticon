@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -47,9 +47,9 @@ $config = $this->container->appConfig;
                     <div class="input-group-text">
                         media/css/
                     </div>
-                    <input type="text" class="form-control" id="theme" name="options[theme]"
-                           value="{{{ $config->get('theme', 'theme') ?: 'theme' }}}"
-                    >
+
+                    {{ $this->container->helper->setup->cssThemeSelect($config->get('theme', 'theme') ?: 'theme') }}
+
                     <div class="input-group-text">
                         .min.css
                     </div>
@@ -108,6 +108,23 @@ $config = $this->container->appConfig;
                     <label class="form-check-label" for="phpwarnings">
                         @lang('PANOPTICON_SYSCONFIG_LBL_FIELD_PHPWARNINGS')
                     </label>
+                </div>
+            </div>
+        </div>
+
+        {{--avatars--}}
+        <div class="row mb-3">
+            <div class="col-sm-9 offset-sm-3">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" name="options[avatars]" id="avatars"
+                            {{ $config->get('avatars', false) ? 'checked' : '' }}
+                    >
+                    <label class="form-check-label" for="avatars">
+                        @lang('PANOPTICON_SYSCONFIG_LBL_FIELD_AVATARS')
+                    </label>
+                </div>
+                <div class="form-text">
+                    @lang('PANOPTICON_SYSCONFIG_LBL_FIELD_AVATARS_HELP')
                 </div>
             </div>
         </div>

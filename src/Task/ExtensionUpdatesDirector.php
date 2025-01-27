@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -364,6 +364,12 @@ class ExtensionUpdatesDirector extends AbstractCallback
 					->from($db->quoteName('#__sites'));
 		$query->where([
 			$db->quoteName('enabled') . ' = 1',
+		]);
+
+		// Only fetch Joomla! sites. NB! Legacy records do not have a cmsType.
+		$query->andWhere([
+			$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' = ' . $db->quote('joomla'),
+			$query->jsonExtract($db->quoteName('config'), '$.cmsType') . ' IS NULL'
 		]);
 
 		if (!$force)

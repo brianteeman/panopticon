@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -14,7 +14,7 @@
         <meta name="robots" content="noindex,nofollow" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <title><?= $_message; ?></title>
-        <link rel="icon" type="image/png" href="<?= $this->include('assets/images/favicon.png.base64'); ?>">
+        <link rel="icon" type="image/png" href="media/images/logo_colour.svg">
         <style><?= $this->include('assets/css/exception.css'); ?></style>
         <style><?= $this->include('assets/css/exception_full.css'); ?></style>
         <style>

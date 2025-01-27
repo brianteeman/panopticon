@@ -8,6 +8,4 @@ defined('AKEEBA') || die;
  */
 ?>
 
-{{-- TODO Implement me --}}
-
-Miscellaneous Action
+@lang('PANOPTICON_REPORTS_LBL_MISC')

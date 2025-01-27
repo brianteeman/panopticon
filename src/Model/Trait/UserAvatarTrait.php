@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -25,7 +25,7 @@ trait UserAvatarTrait
 			'https://www.gravatar.com/avatar/%s?d=mp&s=%d',
 			function_exists('hash') && function_exists('hash_algos') && in_array('sha256', hash_algos())
 				? hash('sha256', strtolower(trim($this->email)))
-				: md5(strtolower(trim($this->email))),
+				: hash('md5', strtolower(trim($this->email))),
 			max(1, min(2048, $size))
 		);
 
@@ -50,7 +50,7 @@ trait UserAvatarTrait
 			'https://www.gravatar.com/%s',
 			function_exists('hash') && function_exists('hash_algos') && in_array('sha256', hash_algos())
 				? hash('sha256', strtolower(trim($this->email)))
-				: md5(strtolower(trim($this->email))),
+				: hash('md5', strtolower(trim($this->email))),
 		);
 
 		$params = $this->parameters instanceof Registry ? $this->parameters : new Registry($this->parameters);

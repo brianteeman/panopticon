@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -124,7 +124,7 @@ class Html extends \Awf\Mvc\DataView\Html
 		if ($subTitle)
 		{
 			$title .= sprintf(
-				'<small class="ms-1 text-muted"><span class="fa fa-chevron-right" aria-hidden="true"></span></small><small class="ms-2 text-primary-emphasis">%s</small>',
+				' - <small>%s</small>',
 				$subTitle
 			);
 		}

@@ -1,11 +1,12 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
 use Akeeba\Panopticon\Application\BootstrapUtilities;
+use Akeeba\Panopticon\Library\Plugin\PluginHelper;
 
 // I must include the file since the autoloader is not yet set up.
 require_once APATH_ROOT . '/src/Application/BootstrapUtilities.php';
@@ -22,10 +23,10 @@ require_once APATH_ROOT . '/vendor/autoload.php';
 BootstrapUtilities::applyExceptionsHandler();
 
 // Apply debug-related user preferences before the application initialisation
+BootstrapUtilities::applySecret();
 BootstrapUtilities::applyErrorReportingToPHP();
 BootstrapUtilities::applyDebugToConstant();
 BootstrapUtilities::conditionallyForceBladeRecompilation();
-
 // Apply network-related settings
 BootstrapUtilities::applyLoadBalancerConfiguration();
 BootstrapUtilities::applyCustomCAFile();
@@ -35,5 +36,17 @@ BootstrapUtilities::loadConfiguration();
 BootstrapUtilities::setUpUserManager();
 BootstrapUtilities::fallbackLanguage();
 
+// Tell MySQL to use the GMT timezone for NOW() and other time functions (this preserves our sanity!)
+BootstrapUtilities::mySQLUseGMT();
+
+// Evaluate IP blocking
+BootstrapUtilities::evaluateIPBlocking();
+
 // Apply user-supplied code and miscellaneous files
 BootstrapUtilities::loadUserCode();
+
+// Addresses MySQL errors about the sort buffer being too short, especially when sending email.
+BootstrapUtilities::workaroundMySQLSortBufferSize();
+
+// Load plugins
+PluginHelper::loadPlugins();

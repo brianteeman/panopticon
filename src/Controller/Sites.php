@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -14,6 +14,7 @@ use Akeeba\Panopticon\Controller\Trait\AdminToolsIntegrationTrait;
 use Akeeba\Panopticon\Controller\Trait\AkeebaBackupIntegrationTrait;
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNotInstalled;
 use Akeeba\Panopticon\Exception\SiteConnectionException;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Queue\QueueInterface;
 use Akeeba\Panopticon\Library\Queue\QueueTypeEnum;
 use Akeeba\Panopticon\Library\Task\Status;
@@ -26,6 +27,9 @@ use Akeeba\Panopticon\Model\Task;
 use Akeeba\Panopticon\Task\RefreshSiteInfo;
 use Akeeba\Panopticon\Task\Trait\EnqueueExtensionUpdateTrait;
 use Akeeba\Panopticon\Task\Trait\EnqueueJoomlaUpdateTrait;
+use Akeeba\Panopticon\Task\Trait\EnqueuePluginUpdateTrait;
+use Akeeba\Panopticon\Task\Trait\EnqueueWordPressUpdateTrait;
+use Akeeba\Panopticon\Task\Trait\SaveSiteTrait;
 use Akeeba\Panopticon\View\Sites\Html;
 use Awf\Inflector\Inflector;
 use Awf\Mvc\DataController;
@@ -41,9 +45,12 @@ class Sites extends DataController
 {
 	use ACLTrait;
 	use EnqueueJoomlaUpdateTrait;
+	use EnqueueWordPressUpdateTrait;
 	use EnqueueExtensionUpdateTrait;
+	use EnqueuePluginUpdateTrait;
 	use AkeebaBackupIntegrationTrait;
 	use AdminToolsIntegrationTrait;
+	use SaveSiteTrait;
 
 	private const CHECKBOX_KEYS = [
 		'config.core_update.email_error',
@@ -56,6 +63,44 @@ class Sites extends DataController
 
 		return parent::execute($task);
 	}
+
+    /**
+     * Runs batch processes on selected sites
+     *
+     * @return void
+     * @throws Exception
+     */
+    public function batch(): void
+    {
+	    $type    = null;
+	    $message = $this->getLanguage()->text('PANOPTICON_SITES_BATCH_COMPLETED');
+
+	    /** @var \Akeeba\Panopticon\Model\Sites $model */
+	    $model = $this->getModel();
+
+	    $addGroups = $this->input->get('groups', [], 'raw');
+	    $addGroups = array_map('intval', $addGroups);
+
+	    $data['groups'] = $addGroups;
+
+	    $removeGroups = $this->input->get('groups_remove', [], 'raw');
+	    $removeGroups = array_map('intval', $removeGroups);
+
+	    $data['groups_remove'] = $removeGroups;
+
+	    try
+	    {
+		    $ids = $this->getIDsFromRequest($model, false);
+		    $model->batch($ids, $data);
+	    }
+	    catch (RuntimeException $e)
+	    {
+		    $type    = 'warning';
+		    $message = $e->getMessage();
+	    }
+
+	    $this->setRedirect('index.php?view=sites', $message, $type);
+    }
 
 	/**
 	 * Run the connection doctor on a site.
@@ -168,6 +213,11 @@ class Sites extends DataController
 		try
 		{
 			$site->findOrFail($id);
+
+			if ($site->cmsType() !== CMSType::JOOMLA)
+			{
+				throw new RuntimeException('This is only possible with Joomla! sites.');
+			}
 
 			$site->fixCoreUpdateSite();
 
@@ -339,17 +389,26 @@ class Sites extends DataController
 
 		$site->findOrFail($id);
 
+		if ($site->cmsType() !== CMSType::JOOMLA)
+		{
+			throw new RuntimeException('This is only possible with Joomla! sites.');
+		}
+
 		try
 		{
 			/** @noinspection PhpParamsInspection */
 			$this->enqueueJoomlaUpdate($site, $this->container, $force, $this->container->userManager->getUser());
 
 			// Update the core.lastAutoUpdateVersion after enqueueing
-			$site->findOrFail($id);
-			$config = $site->getConfig();
-			$config->set('core.lastAutoUpdateVersion', $config->get('core.current.version'));
-			$site->config = $config->toString();
-			$site->save();
+			$this->saveSite(
+				$site,
+				function (Site $site)
+				{
+					$config = $site->getConfig();
+					$config->set('core.lastAutoUpdateVersion', $config->get('core.latest.version'));
+					$site->config = $config->toString();
+				}
+			);
 
 			$type    = 'info';
 			$message = $this->getLanguage()->text('PANOPTICON_SITE_LBL_JUPDATE_SCHEDULE_OK');
@@ -399,6 +458,11 @@ class Sites extends DataController
 		);
 
 		$site->findOrFail($id);
+
+		if ($site->cmsType() !== CMSType::JOOMLA)
+		{
+			throw new RuntimeException('This is only possible with Joomla! sites.');
+		}
 
 		try
 		{
@@ -476,7 +540,12 @@ class Sites extends DataController
 			$task->findOrFail(
 				[
 					'site_id' => (int) $id,
-					'type'    => 'joomlaupdate',
+					'type'    => match ($site->cmsType())
+					{
+						CMSType::JOOMLA => 'joomlaupdate',
+						CMSType::WORDPRESS => 'wordpressupdate',
+						default => 'xxx_invalid_xxx',
+					},
 				]
 			);
 
@@ -540,7 +609,12 @@ class Sites extends DataController
 			$task->findOrFail(
 				[
 					'site_id' => (int) $id,
-					'type'    => 'extensionsupdate',
+					'type'    => match ($site->cmsType())
+					{
+						CMSType::JOOMLA => 'extensionsupdate',
+						CMSType::WORDPRESS => 'pluginsupdate',
+						default => 'xxx_invalid_xxx',
+					},
 				]
 			);
 
@@ -611,14 +685,29 @@ class Sites extends DataController
 		{
 			if ($resetQueue)
 			{
-				$queueKey = sprintf(QueueTypeEnum::EXTENSIONS->value, $site->id);
+				$queuePattern = match ($site->cmsType()) {
+					CMSType::JOOMLA => QueueTypeEnum::EXTENSIONS->value,
+					CMSType::WORDPRESS => QueueTypeEnum::PLUGINS->value,
+					default => 'xxx_invalid_xxx.%d'
+				};
+
+				$queueKey = sprintf($queuePattern, $site->id);
 				/** @var QueueInterface $queue */
 				$queue = $this->container->queueFactory->makeQueue($queueKey);
 
 				$queue->clear();
 			}
 
-			$this->scheduleExtensionsUpdateForSite($site, $this->getContainer());
+			switch ($site->cmsType())
+			{
+				case CMSType::JOOMLA:
+					$this->scheduleExtensionsUpdateForSite($site, $this->getContainer());
+					break;
+
+				case CMSType::WORDPRESS:
+					$this->schedulePluginsUpdateForSite($site, $this->getContainer());
+					break;
+			}
 
 			$type    = 'info';
 			$message = $this->getLanguage()->text('PANOPTICON_SITE_LBL_EXTENSION_UPDATE_SCHEDULE_OK');
@@ -671,6 +760,11 @@ class Sites extends DataController
 
 		$site->findOrFail($siteId);
 
+		if ($site->cmsType() !== CMSType::JOOMLA)
+		{
+			throw new RuntimeException('This is only possible with Joomla! sites.');
+		}
+
 		try
 		{
 			/** @noinspection PhpParamsInspection */
@@ -717,27 +811,32 @@ class Sites extends DataController
 	{
 		$this->csrfProtection();
 
-		/** @var SiteModel $model */
-		$model = $this->getModel();
+		/** @var SiteModel $site */
+		$site = $this->getModel();
 
-		if (!$model->getId())
+		if (!$site->getId())
 		{
-			$this->getIDsFromRequest($model, true);
+			$this->getIDsFromRequest($site, true);
 		}
 
-		if (!$this->canAddEditOrSave($model))
+		if (!$this->canAddEditOrSave($site))
 		{
 			throw new RuntimeException($this->getLanguage()->text('AWF_APPLICATION_ERROR_ACCESS_FORBIDDEN'), 403);
 		}
 
 		// Does the site record exist?
-		if ($model->getId() <= 0)
+		if ($site->getId() <= 0)
 		{
 			return false;
 		}
 
+		if ($site->cmsType() !== CMSType::JOOMLA)
+		{
+			throw new RuntimeException('This is only possible with Joomla! sites.');
+		}
+
 		// Does the extension exist?
-		$extensions  = (array) $model->getConfig()->get('extensions.list');
+		$extensions  = (array) $site->getConfig()->get('extensions.list');
 		$extensionID = $this->input->getInt('extension', -1);
 
 		if (!isset($extensions[$extensionID]))
@@ -747,7 +846,7 @@ class Sites extends DataController
 
 		$view = $this->getView();
 
-		$view->setDefaultModel($model);
+		$view->setDefaultModel($site);
 		$view->extension = $extensions[$extensionID];
 		$view->setLayout('dlkey');
 
@@ -760,27 +859,32 @@ class Sites extends DataController
 	{
 		$this->csrfProtection();
 
-		/** @var SiteModel $model */
-		$model = $this->getModel();
+		/** @var SiteModel $site */
+		$site = $this->getModel();
 
-		if (!$model->getId())
+		if (!$site->getId())
 		{
-			$this->getIDsFromRequest($model, true);
+			$this->getIDsFromRequest($site, true);
 		}
 
-		if (!$this->canAddEditOrSave($model))
+		if (!$this->canAddEditOrSave($site))
 		{
 			throw new RuntimeException($this->getLanguage()->text('AWF_APPLICATION_ERROR_ACCESS_FORBIDDEN'), 403);
 		}
 
 		// Does the site record exist?
-		if ($model->getId() <= 0)
+		if ($site->getId() <= 0)
 		{
 			return false;
 		}
 
+		if ($site->cmsType() !== CMSType::JOOMLA)
+		{
+			throw new RuntimeException('This is only possible with Joomla! sites.');
+		}
+
 		// Does the extension exist?
-		$extensions  = (array) $model->getConfig()->get('extensions.list');
+		$extensions  = (array) $site->getConfig()->get('extensions.list');
 		$extensionID = $this->input->getInt('extension', -1);
 
 		if (!isset($extensions[$extensionID]))
@@ -820,7 +924,7 @@ class Sites extends DataController
 			$url = $router->route(
 				sprintf(
 					"index.php?view=sites&task=read&id=%d",
-					$model->getId()
+					$site->getId()
 				)
 			);
 		}
@@ -828,6 +932,216 @@ class Sites extends DataController
 		$this->setRedirect($url, $message, $type);
 
 		return true;
+	}
+
+	public function scheduleWordPressUpdate()
+	{
+		$this->csrfProtection();
+
+		$id    = $this->input->get->getInt('id', 0);
+		$force = $this->input->get->getBool('force', false);
+
+		/** @var SiteModel $site */
+		$site = $this->getModel(
+			'Site', [
+				'modelTemporaryInstance' => true,
+				'modelClearState'        => true,
+				'modelClearInput'        => true,
+			]
+		);
+
+		$site->findOrFail($id);
+
+		if ($site->cmsType() !== CMSType::WORDPRESS)
+		{
+			throw new RuntimeException('This is only possible with WordPress sites.');
+		}
+
+		try
+		{
+			/** @noinspection PhpParamsInspection */
+			$this->enqueueWordPressUpdate($site, $this->container, $force, $this->container->userManager->getUser());
+
+			// Update the core.lastAutoUpdateVersion after enqueueing
+			$this->saveSite(
+				$site,
+				function (Site $site)
+				{
+					$config = $site->getConfig();
+					$config->set('core.lastAutoUpdateVersion', $config->get('core.latest.version'));
+					$site->config = $config->toString();
+				}
+			);
+
+			$type    = 'info';
+			$message = $this->getLanguage()->text('PANOPTICON_SITE_LBL_WPUPDATE_SCHEDULE_OK');
+		}
+		catch (Throwable $e)
+		{
+			$type    = 'error';
+			$message = $this->getLanguage()->sprintf('PANOPTICON_SITE_ERR_WPUPDATE_SCHEDULE_FAILED', $e->getMessage());
+		}
+
+		$returnUri = $this->input->get->getBase64('return', '');
+
+		if (!empty($returnUri))
+		{
+			$returnUri = @base64_decode($returnUri);
+
+			if (!Uri::isInternal($returnUri))
+			{
+				$returnUri = null;
+			}
+		}
+
+		if (empty($returnUri))
+		{
+			$returnUri = $this->container->router->route(
+				sprintf('index.php?view=site&task=read&id=%s', $id)
+			);
+		}
+
+		$this->setRedirect($returnUri, $message, $type);
+	}
+
+	public function unscheduleWordPressUpdate()
+	{
+		$this->csrfProtection();
+
+		$id    = $this->input->get->getInt('id', 0);
+		$force = $this->input->get->getBool('force', false);
+
+		/** @var SiteModel $site */
+		$site = $this->getModel(
+			'Site', [
+				'modelTemporaryInstance' => true,
+				'modelClearState'        => true,
+				'modelClearInput'        => true,
+			]
+		);
+
+		$site->findOrFail($id);
+
+		if ($site->cmsType() !== CMSType::WORDPRESS)
+		{
+			throw new RuntimeException('This is only possible with WordPress sites.');
+		}
+
+		try
+		{
+			/** @var Task|null $task */
+			$task = $site->getJoomlaUpdateTask();
+
+			if ($task === null)
+			{
+				throw new RuntimeException('PANOPTICON_SITE_LBL_WPUPDATE_UNSCHEDULE_ERR_NOT_SCHEDULED');
+			}
+
+			if (in_array(
+				$task->last_exit_code, [
+					Status::WILL_RESUME->value,
+					Status::RUNNING->value,
+				]
+			))
+			{
+				throw new RuntimeException('PANOPTICON_SITE_LBL_WPUPDATE_UNSCHEDULE_ERR_RUNNING');
+			}
+
+			$task->last_exit_code = Status::OK->value;
+
+			$task->unpublish();
+		}
+		catch (Throwable $e)
+		{
+			$type    = 'error';
+			$message = $this->getLanguage()->sprintf('PANOPTICON_SITE_ERR_WPUPDATE_UNSCHEDULE_FAILED', $e->getMessage());
+		}
+
+		$returnUri = $this->input->get->getBase64('return', '');
+
+		if (!empty($returnUri))
+		{
+			$returnUri = @base64_decode($returnUri);
+
+			if (!Uri::isInternal($returnUri))
+			{
+				$returnUri = null;
+			}
+		}
+
+		if (empty($returnUri))
+		{
+			$returnUri = $this->container->router->route(
+				sprintf('index.php?view=site&task=read&id=%s', $id)
+			);
+		}
+
+		$this->setRedirect($returnUri, $message, $type);
+	}
+
+	public function schedulePluginUpdate()
+	{
+		$this->csrfProtection();
+
+		$id     = $this->input->get->getString('id', '');
+		$siteId = $this->input->get->getInt('site_id', 0);
+
+		/** @var SiteModel $site */
+		$site = $this->getModel(
+			'Site', [
+				'modelTemporaryInstance' => true,
+				'modelClearState'        => true,
+				'modelClearInput'        => true,
+			]
+		);
+
+		$site->findOrFail($siteId);
+
+		if ($site->cmsType() !== CMSType::WORDPRESS)
+		{
+			throw new RuntimeException('This is only possible with WordPress sites.');
+		}
+
+		try
+		{
+			/** @noinspection PhpParamsInspection */
+			if ($this->enqueuePluginUpdate($site, $id, user: $this->container->userManager->getUser()))
+			{
+				/** @noinspection PhpParamsInspection */
+				$this->scheduleExtensionsUpdateForSite($site, $this->container);
+			}
+
+			$type    = 'info';
+			$message = $this->getLanguage()->text('PANOPTICON_SITE_LBL_PLUGIN_UPDATE_SCHEDULE_OK');
+		}
+		catch (Throwable $e)
+		{
+			$type    = 'error';
+			$message = $this->getLanguage()->sprintf(
+				'PANOPTICON_SITE_ERR_PLUGIN_UPDATE_SCHEDULE_FAILED', $e->getMessage()
+			);
+		}
+
+		$returnUri = $this->input->get->getBase64('return', '');
+
+		if (!empty($returnUri))
+		{
+			$returnUri = @base64_decode($returnUri);
+
+			if (!Uri::isInternal($returnUri))
+			{
+				$returnUri = null;
+			}
+		}
+
+		if (empty($returnUri))
+		{
+			$returnUri = $this->container->router->route(
+				sprintf('index.php?view=site&task=read&id=%s', $siteId)
+			);
+		}
+
+		$this->setRedirect($returnUri, $message, $type);
 	}
 
 	protected function onBeforeBrowse(): bool
@@ -1264,16 +1578,19 @@ class Sites extends DataController
 			}
 
 			// Update the Akeeba Backup information if necessary
-			if (isset($warnings) && !in_array('akeebabackup', $warnings ?? []))
+			if (isset($warnings))
 			{
-				$model->testAkeebaBackupConnection();
-			}
-			else
-			{
-				$config = $model->getConfig();
-				$config->set('akeebabackup.info', null);
-				$config->set('akeebabackup.endpoint', null);
-				$model->setFieldValue('config', $config->toString());
+				if (in_array('akeebabackup', $warnings ?? []))
+				{
+					$config = $model->getConfig();
+					$config->set('akeebabackup.info', null);
+					$config->set('akeebabackup.endpoint', null);
+					$model->setFieldValue('config', $config->toString());
+				}
+				else
+				{
+					$model->testAkeebaBackupConnection();
+				}
 			}
 
 			// Save the data

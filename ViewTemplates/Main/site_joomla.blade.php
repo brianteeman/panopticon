@@ -1,13 +1,14 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
 defined('AKEEBA') || die;
 
-use Akeeba\Panopticon\Library\JoomlaVersion\JoomlaVersion;
+use Akeeba\Panopticon\Library\SoftwareVersions\JoomlaVersion;
+use Akeeba\Panopticon\Library\Enumerations\JoomlaUpdateRunState;
 use Akeeba\Panopticon\Library\Version\Version;
 use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\View\Main\Html;
@@ -23,7 +24,9 @@ $stability           = $config->get('core.current.stability');
 $canUpgrade          = $config->get('core.canUpgrade');
 $latestJoomlaVersion = $config->get('core.latest.version');
 $lastError           = trim($config->get('core.lastErrorMessage') ?? '');
-$jUpdateFailure      = !$config->get('core.extensionAvailable', true) || !$config->get('core.updateSiteAvailable', true);
+$jRunState           = $item->getJoomlaUpdateRunState();
+$jUpdateFailure      = !$config->get('core.extensionAvailable', true)
+                       || !$config->get('core.updateSiteAvailable', true);
 $token               = $this->container->session->getCsrfToken()->getValue();
 $returnUrl           = base64_encode(\Awf\Uri\Uri::getInstance()->toString());
 $jVersionHelper      = new JoomlaVersion($this->getContainer());
@@ -31,34 +34,35 @@ $jVersionHelper      = new JoomlaVersion($this->getContainer());
 
 @repeatable('joomlaVersion', $jVersion)
 {{{ $jVersion }}}
-<?php $version = Version::create($jVersion) ?>
+<?php
+$version = Version::create($jVersion) ?>
 @if($version->isDev())
     <sup>
-            <span class="badge bg-danger small text-light">
-                <span aria-hidden="true">@lang('PANOPTICON_MAIN_SITES_LBL_DEV_SHORT')</span>
-                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_DEV_LONG')</span>
-            </span>
+        <span class="badge bg-danger">
+            <span aria-hidden="true">@lang('PANOPTICON_MAIN_SITES_LBL_DEV_SHORT')</span>
+            <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_DEV_LONG')</span>
+        </span>
     </sup>
 @elseif($version->isAlpha())
     <sup>
-            <span class="badge bg-danger small">
-                <span aria-hidden="true">@lang('PANOPTICON_MAIN_SITES_LBL_ALPHA_SHORT')</span>
-                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_ALPHA_LONG')</span>
-            </span>
+        <span class="badge bg-danger">
+            <span aria-hidden="true">@lang('PANOPTICON_MAIN_SITES_LBL_ALPHA_SHORT')</span>
+            <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_ALPHA_LONG')</span>
+        </span>
     </sup>
 @elseif($version->isBeta())
     <sup>
-            <span class="badge bg-warning small">
-                <span aria-hidden="true">@lang('PANOPTICON_MAIN_SITES_LBL_BETA_SHORT')</span>
-                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_BETA_LONG')</span>
-            </span>
+        <span class="badge text-bg-warning">
+            <span aria-hidden="true">@lang('PANOPTICON_MAIN_SITES_LBL_BETA_SHORT')</span>
+            <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_BETA_LONG')</span>
+        </span>
     </sup>
 @elseif($version->isRC())
     <sup>
-            <span class="badge bg-info small">
-                <span aria-hidden="true">@lang('PANOPTICON_MAIN_SITES_LBL_RC_SHORT')</span>
-                <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_RC_LONG')</span>
-            </span>
+        <span class="badge bg-info">
+            <span aria-hidden="true">@lang('PANOPTICON_MAIN_SITES_LBL_RC_SHORT')</span>
+            <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_RC_LONG')</span>
+        </span>
     </sup>
 @else
     <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_STABLE_LONG')</span>
@@ -66,11 +70,11 @@ $jVersionHelper      = new JoomlaVersion($this->getContainer());
 @endrepeatable
 
 @repeatable('joomlaLogo')
-    <span class="fab fa-joomla" aria-hidden="true"
-          data-bs-toggle="tooltip" data-bs-placement="bottom"
-          data-bs-title="Joomla!&reg;"
-    ></span>
-    <span class="visually-hidden">Joomla!&reg;</span>
+<span class="fab fa-joomla" aria-hidden="true"
+      data-bs-toggle="tooltip" data-bs-placement="bottom"
+      data-bs-title="Joomla!&reg;"
+></span>
+<span class="visually-hidden">Joomla!&reg;</span>
 @endrepeatable
 
 <div class="d-flex flex-row gap-2">
@@ -86,7 +90,8 @@ $jVersionHelper      = new JoomlaVersion($this->getContainer());
 
     {{-- Did we have an error last time we tried to update the site information? --}}
     @if ($lastError)
-        <?php $siteInfoLastErrorModalID = 'silem-' . md5(random_bytes(120)); ?>
+			<?php
+			$siteInfoLastErrorModalID = 'silem-' . hash('md5', random_bytes(120)); ?>
         <div>
             <div class="btn btn-danger btn-sm" aria-hidden="true"
                  data-bs-toggle="modal" data-bs-target="#{{ $siteInfoLastErrorModalID }}"
@@ -140,17 +145,17 @@ $jVersionHelper      = new JoomlaVersion($this->getContainer());
                 @lang('PANOPTICON_MAIN_SITES_LBL_JOOMLA_UPDATES_BROKEN')
             </span>
         </div>
-    @elseif ($config->get('core.canUpgrade', false) && $item->isJoomlaUpdateTaskStuck())
+    @elseif ($jRunState === JoomlaUpdateRunState::ERROR)
         <div>
-            <div class="badge bg-light text-dark"
+            <div class="badge text-bg-danger py-2"
                  data-bs-toggle="tooltip" data-bs-placement="bottom"
                  data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_CORE_STUCK_UPDATE')"
             >
-                <span class="fa fa-bell" aria-hidden="true"></span>
+                <span class="fa fa-fw fa-circle-xmark" aria-hidden="true"></span>
                 <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_STUCK_UPDATE')</span>
             </div>
         </div>
-    @elseif($config->get('core.canUpgrade', false) && $item->isJoomlaUpdateTaskRunning())
+    @elseif($jRunState === JoomlaUpdateRunState::RUNNING)
         <div>
             <div class="badge bg-info-subtle text-primary"
                  data-bs-toggle="tooltip" data-bs-placement="bottom"
@@ -160,7 +165,7 @@ $jVersionHelper      = new JoomlaVersion($this->getContainer());
                 <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_CORE_RUNNING_UPDATE')</span>
             </div>
         </div>
-    @elseif ($config->get('core.canUpgrade', false) && $item->isJoomlaUpdateTaskScheduled())
+    @elseif ($jRunState === JoomlaUpdateRunState::SCHEDULED)
         <div>
             <div class="badge bg-info-subtle text-info"
                  data-bs-toggle="tooltip" data-bs-placement="bottom"
@@ -174,7 +179,9 @@ $jVersionHelper      = new JoomlaVersion($this->getContainer());
 
     {{-- Joomla! version --}}
     @if (empty($jVersion))
-        <span class="badge bg-secondary-subtle">@lang('PANOPTICON_MAIN_SITES_LBL_JVERSION_UNKNOWN')</span>
+        <div>
+            <span class="badge bg-secondary-subtle text-dark">@lang('PANOPTICON_MAIN_SITES_LBL_JVERSION_UNKNOWN')</span>
+        </div>
     @else
         @if ($canUpgrade)
             <div
@@ -201,12 +208,12 @@ $jVersionHelper      = new JoomlaVersion($this->getContainer());
                 </div>
             @elseif($jVersionHelper->isEOLMajor($jVersion))
                 <div class="text-danger-emphasis">
+                    @yieldRepeatable('joomlaLogo')
                     <span class="fa fa-fw fa-skull" aria-hidden="true"
                           data-bs-toggle="tooltip" data-bs-placement="bottom"
                           data-bs-title="@lang('PANOPTICON_MAIN_SITES_LBL_JOOMLA_EOL_MAJOR')"
                     ></span>
                     <span class="visually-hidden">@lang('PANOPTICON_MAIN_SITES_LBL_JOOMLA_EOL_MAJOR')</span>
-                    @yieldRepeatable('joomlaLogo')
                     @yieldRepeatable('joomlaVersion', $jVersion)
                 </div>
             @elseif($jVersionHelper->isEOLBranch($jVersion))
@@ -233,8 +240,8 @@ $jVersionHelper      = new JoomlaVersion($this->getContainer());
     @if (($overridesChanged = $config->get('core.overridesChanged')) > 0)
         <div class="ms-2 small" data-bs-toggle="tooltip" data-bs-placement="bottom"
              data-bs-title="@sprintf('PANOPTICON_SITE_LBL_TEMPLATE_OVERRIDES_CHANGED_N', $overridesChanged)">
-            <span class="badge bg-light-subtle text-warning border border-warning-subtle">
-                <span class="fa fa-arrows-to-eye fa-fw" aria-hidden="true"></span>
+            <span class="badge text-bg-warning">
+                <span class="fa fa-fw fa-arrows-to-circle" aria-hidden="true"></span>
                 <span aria-hidden="true">{{ $overridesChanged ?? 0 }}</span>
                 <span class="visually-hidden">@sprintf('PANOPTICON_SITE_LBL_TEMPLATE_OVERRIDES_CHANGED_N', $overridesChanged)</span>
             </span>

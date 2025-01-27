@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,6 +11,7 @@ defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Helper\Html2Text;
 use Akeeba\Panopticon\Helper\LanguageListTrait;
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Akeeba\Panopticon\Library\Queue\QueueItem;
 use Akeeba\Panopticon\Library\Queue\QueueTypeEnum;
 use Akeeba\Panopticon\Library\Task\AbstractCallback;
@@ -21,12 +22,14 @@ use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Task\Trait\ApiRequestTrait;
 use Akeeba\Panopticon\Task\Trait\EmailSendingTrait;
 use Akeeba\Panopticon\Task\Trait\JsonSanitizerTrait;
+use Akeeba\Panopticon\Task\Trait\SaveSiteTrait;
 use Akeeba\Panopticon\Task\Trait\SiteNotificationEmailTrait;
 use Akeeba\Panopticon\View\Mailtemplates\Html;
 use Awf\Registry\Registry;
 use Exception;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\RequestOptions;
+use RuntimeException;
 
 #[AsTask(name: 'extensionsupdate', description: 'PANOPTICON_TASKTYPE_EXTENSIONSUPDATE')]
 class ExtensionsUpdate extends AbstractCallback
@@ -36,6 +39,7 @@ class ExtensionsUpdate extends AbstractCallback
 	use EmailSendingTrait;
 	use LanguageListTrait;
 	use JsonSanitizerTrait;
+	use SaveSiteTrait;
 
 	public function __invoke(object $task, Registry $storage): int
 	{
@@ -43,6 +47,11 @@ class ExtensionsUpdate extends AbstractCallback
 		/** @var Site $site */
 		$site = $this->container->mvcFactory->makeTempModel('Site');
 		$site->findOrFail($task->site_id);
+
+		if ($site->cmsType() !== CMSType::JOOMLA)
+		{
+			throw new RuntimeException('This is not a Joomla site!');
+		}
 
 		$this->logger->pushLogger($this->container->loggerFactory->get($this->name . '.' . $site->id));
 
@@ -374,62 +383,50 @@ class ExtensionsUpdate extends AbstractCallback
 		);
 
 		// Update extensions.list and extensions.hasUpdates in the site's config storage
-		try
-		{
-			// Ensure the site information read/write is an atomic operation
-			$this->container->db->lockTable('#__sites');
-
-			// Reload the site information, in case it changed while we were installing updates
-			$site->findOrFail($site->id);
-
-			// Get the extensions list
-			$siteConfig = $site->getConfig() ?? new Registry();;
-			$extensions = (array) $siteConfig->get('extensions.list');
-
-			// Make sure our updated extension didn't get uninstalled in the meantime
-			if (!isset($extensions[$extensionId]))
+		$this->saveSite(
+			$site,
+			function (Site $site) use ($extensionId)
 			{
-				throw new \RuntimeException('The extension went away.');
+				// Reload the site information, in case it changed while we were installing updates
+				$site->findOrFail($site->id);
+
+				// Get the extensions list
+				$siteConfig = $site->getConfig() ?? new Registry();;
+				$extensions = (array) $siteConfig->get('extensions.list');
+
+				// Make sure our updated extension didn't get uninstalled in the meantime
+				if (!isset($extensions[$extensionId]))
+				{
+					throw new \RuntimeException('The extension went away.');
+				}
+
+				// Mark the extension as not having updates
+				$extensions[$extensionId]->version->new = null;
+				$siteConfig->set('extensions.list', $extensions);
+
+				// Set a flag for the existence of updates
+				$hasUpdates = array_reduce(
+					$extensions,
+					function (bool $carry, object $item): int {
+						$current = $item?->version?->current;
+						$new     = $item?->version?->new;
+
+						if ($carry || empty($current) || empty($new))
+						{
+							return $carry;
+						}
+
+						return version_compare($current, $new, 'lt');
+					},
+					false
+				);
+
+				$siteConfig->set('extensions.hasUpdates', $hasUpdates);
+
+				// Update the site's JSON config field
+				$site->config = $siteConfig->toString('JSON');
 			}
-
-			// Mark the extension as not having updates
-			$extensions[$extensionId]->version->new = null;
-			$siteConfig->set('extensions.list', $extensions);
-
-			// Set a flag for the existence of updates
-			$hasUpdates = array_reduce(
-				$extensions,
-				function (bool $carry, object $item): int {
-					$current = $item?->version?->current;
-					$new     = $item?->version?->new;
-
-					if ($carry || empty($current) || empty($new))
-					{
-						return $carry;
-					}
-
-					return version_compare($current, $new, 'lt');
-				},
-				false
-			);
-
-			$siteConfig->set('extensions.hasUpdates', $hasUpdates);
-
-			// Update the site's JSON config field
-			$site->config = $siteConfig->toString('JSON');
-
-			// Save the modified site
-			$site->save();
-		}
-		catch (\Throwable)
-		{
-			// No worries, this was a mostly optional step...
-		}
-		finally
-		{
-			// No matter what happens, we need to unlock the tables.
-			$this->container->db->unlockTables();
-		}
+		);
 
 		$updateStatus[$extensionId] = [
 			'type'     => $extensions[$extensionId]->type,
@@ -559,6 +556,8 @@ class ExtensionsUpdate extends AbstractCallback
 		$data->set('permissions', ['panopticon.super', 'panopticon.admin', 'panopticon.editown']);
 		$data->set('email_cc', $cc);
 
+		$this->logger->debug("Sending email extensions_update_done (results of extension updates)", $data->toArray());
+
 		$this->enqueueEmail($data, $site->id, 'now');
 	}
 
@@ -594,6 +593,8 @@ class ExtensionsUpdate extends AbstractCallback
 		$data->set('email_variables', $variables);
 		$data->set('permissions', ['panopticon.super', 'panopticon.admin', 'panopticon.editown']);
 		$data->set('email_cc', $this->getSiteNotificationEmails($config));
+
+		$this->logger->debug("Sending email extensions_update_found (extension updates found)", $data->toArray());
 
 		$this->enqueueEmail($data, $site->id, 'now');
 	}
@@ -631,18 +632,23 @@ class ExtensionsUpdate extends AbstractCallback
 	 */
 	private function recordLastSeenVersion(Site $site, int $extensionId): void
 	{
-		$siteConfig                     = $site->getConfig() ?? new Registry();
-		$lastSeenVersions               = $siteConfig->get('director.extensionupdates.lastSeen', []) ?: [];
-		$lastSeenVersions               = is_object($lastSeenVersions) ? (array) $lastSeenVersions : $lastSeenVersions;
-		$lastSeenVersions               = is_array($lastSeenVersions) ? $lastSeenVersions : [];
-		$extensions                     = (array) $siteConfig->get('extensions.list');
-		$extensionItem                  = $extensions[$extensionId] ?? null;
-		$latestVersion                  = $extensionItem?->version?->new;
-		$lastSeenVersions[$extensionId] = $latestVersion;
+		$this->saveSite(
+			$site,
+			function (Site $site) use ($extensionId)
+			{
+				$siteConfig                     = $site->getConfig() ?? new Registry();
+				$lastSeenVersions               = $siteConfig->get('director.extensionupdates.lastSeen', []) ?: [];
+				$lastSeenVersions               = is_object($lastSeenVersions) ? (array) $lastSeenVersions : $lastSeenVersions;
+				$lastSeenVersions               = is_array($lastSeenVersions) ? $lastSeenVersions : [];
+				$extensions                     = (array) $siteConfig->get('extensions.list');
+				$extensionItem                  = $extensions[$extensionId] ?? null;
+				$latestVersion                  = $extensionItem?->version?->new;
+				$lastSeenVersions[$extensionId] = $latestVersion;
 
-		$siteConfig->set('director.extensionupdates.lastSeen', $lastSeenVersions);
-		$site->setFieldValue('config', $siteConfig->toString());
-		$site->save();
+				$siteConfig->set('director.extensionupdates.lastSeen', $lastSeenVersions);
+				$site->setFieldValue('config', $siteConfig->toString());
+			}
+		);
 	}
 
 	/**
@@ -666,6 +672,7 @@ class ExtensionsUpdate extends AbstractCallback
 				APATH_USER_CODE . '/ViewTemplates/Mailtemplates',
 			],
 		];
+		$container->language->loadLanguage($language ?: $container->appConfig->get('language', 'en-GB'));
 		$fakeView                = new Html($container);
 		$rendered                = '';
 
@@ -673,7 +680,7 @@ class ExtensionsUpdate extends AbstractCallback
 		{
 			try
 			{
-				$rendered = $fakeView->loadAnyTemplate(
+				$rendered = $rendered ?: $fakeView->loadAnyTemplate(
 					$template,
 					[
 						'updateStatus' => $updateStatus,
@@ -698,7 +705,7 @@ class ExtensionsUpdate extends AbstractCallback
 		{
 			try
 			{
-				$renderedText = $fakeView->loadAnyTemplate(
+				$renderedText = $renderedText ?: $fakeView->loadAnyTemplate(
 					$template,
 					[
 						'updateStatus' => $updateStatus,

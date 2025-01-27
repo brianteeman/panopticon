@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -12,8 +12,11 @@ defined('AKEEBA') || die;
 use Akeeba\Panopticon\Model\Users;
 use Akeeba\Panopticon\View\Trait\CrudTasksTrait;
 use Akeeba\Panopticon\View\Trait\ShowOnTrait;
+use Awf\Inflector\Inflector;
 use Awf\Mvc\DataView\Html as BaseHtmlView;
+use Awf\User\UserInterface;
 use Awf\Utils\Template;
+use JetBrains\PhpStorm\ArrayShape;
 
 class Html extends BaseHtmlView
 {
@@ -41,7 +44,64 @@ class Html extends BaseHtmlView
 	 */
 	public string $defaultMethod = '';
 
+	/**
+	 * The user whose password reset we are confirming
+	 *
+	 * @var   UserInterface
+	 * @since 1.3.0
+	 */
+	public UserInterface $user;
+
+	/**
+	 * The password reset token
+	 *
+	 * @var   string
+	 * @since 1.3.0
+	 */
+	public string $token;
+
 	protected bool $canEditMFA = false;
+
+	/**
+	 * Can the user decide whether to disable password logins when passkeys are enabled?
+	 *
+	 * @var    bool
+	 * @since  1.2.3
+	 */
+	protected bool $canDecideDisablePassword = false;
+
+	/**
+	 * Variables used for setting up passkeys
+	 *
+	 * @var    array
+	 * @since  1.2.3
+	 */
+	#[ArrayShape([
+		'enabled'         => 'bool',
+		'user'            => '\Akeeba\Panopticon\Library\User\User|null',
+		'allow_add'       => 'bool',
+		'credentials'     => 'array',
+		'error'           => 'string|null',
+		'showImages'      => 'bool',
+		'user_decides_pw' => 'bool',
+	])]
+	protected array $passkeyVariables = [];
+
+	/**
+	 * Collapse other features for forced MFA setup
+	 *
+	 * @var    bool
+	 * @since  1.2.3
+	 */
+	public bool $collapseForMFA = false;
+
+	/**
+	 * Collapse other features for forced passkey setup
+	 *
+	 * @var   bool
+	 * @since 1.2.3
+	 */
+	public bool $collapseForPasskey = false;
 
 	use ShowOnTrait;
 	use CrudTasksTrait
@@ -49,6 +109,35 @@ class Html extends BaseHtmlView
 		onBeforeAdd as onBeforeAddCrud;
 		onBeforeEdit as onBeforeEditCrud;
 	}
+
+	public function onBeforePwreset(): bool
+	{
+		return true;
+	}
+
+	public function onBeforeConfirmreset(): bool
+	{
+		return true;
+	}
+
+	public function onBeforeBrowse(): bool
+	{
+		$this->addButtons(['add', 'edit', 'delete']);
+
+		if (empty($this->getTitle()))
+		{
+			$this->setTitle(
+				$this->getLanguage()->text('PANOPTICON_' . Inflector::pluralize($this->getName()) . '_TITLE')
+			);
+		}
+
+		// If no list limit is set, use the Panopticon default (50) instead of All (AWF's default).
+		$limit = $this->getModel()->getState('limit', 50, 'int');
+		$this->getModel()->setState('limit', $limit);
+
+		return parent::onBeforeBrowse();
+	}
+
 
 	protected function onBeforeAdd()
 	{
@@ -59,7 +148,9 @@ class Html extends BaseHtmlView
 
 	protected function onBeforeEdit()
 	{
-		Template::addJs('media://js/showon.js', $this->getContainer()->application, defer: true);
+		$app = $this->getContainer()->application;
+
+		Template::addJs('media://js/showon.js', $app, defer: true);
 
 		$js = <<< JS
 window.addEventListener('DOMContentLoaded', () => {
@@ -74,9 +165,54 @@ JS;
 
 		$ret = $this->onBeforeEditCrud();
 
-		if ($ret)
+		if (!$ret)
 		{
-			$this->prepareMFAProperties();
+			return $ret;
+		}
+
+		$this->prepareMFAProperties();
+		$this->passkeyVariables = $this->container
+			->mvcFactory
+			->makeTempModel('Passkeys')
+			->getDisplayVariables($this->container->userManager->getUser($this->getModel()->getId()));
+
+		$this->canDecideDisablePassword = $this->passkeyVariables['user_decides_pw'];
+
+		if ($this->passkeyVariables['enabled'] && $this->passkeyVariables['allow_add'])
+		{
+			$router = $this->getContainer()->router;
+			$doc    = $app->getDocument();
+			$token  = $this->getContainer()->session->getCsrfToken()->getValue();
+
+			$doc->lang('PANOPTICON_PASSKEYS_ERR_LABEL_NOT_SAVED');
+			$doc->lang('PANOPTICON_PASSKEYS_ERR_NOT_DELETED');
+			$doc->lang('PANOPTICON_PASSKEYS_ERR_NO_BROWSER_SUPPORT');
+			$doc->lang('PANOPTICON_PASSKEYS_ERR_XHR_INITCREATE');
+			$doc->lang('PANOPTICON_PASSKEYS_MANAGE_BTN_CANCEL_LABEL');
+			$doc->lang('PANOPTICON_PASSKEYS_MANAGE_BTN_SAVE_LABEL');
+			$doc->addScriptOptions(
+				'panopticon.passkey',
+				[
+					'initURL'      => $router->route(
+						sprintf("index.php?view=Passkeys&task=initCreate&format=json&%s=1", $token)
+					),
+					'createURL'    => $router->route(
+						sprintf("index.php?view=Passkeys&task=create&format=raw&%s=1", $token)
+					),
+					'saveLabelURL' => $router->route(
+						sprintf("index.php?view=Passkeys&task=saveLabel&format=json&%s=1", $token)
+					),
+					'deleteURL'    => $router->route(
+						sprintf("index.php?view=Passkeys&task=delete&format=json&%s=1", $token)
+					),
+				]
+			);
+		}
+
+		if ($this->collapseForMFA || $this->collapseForPasskey)
+		{
+			$this->container->application->getDocument()->getToolbar()->removeButtonByName('save');
+			$this->container->application->getDocument()->getToolbar()->removeButtonByName('apply');
 		}
 
 		return $ret;
@@ -175,5 +311,4 @@ JS;
 			];
 		}
 	}
-
 }

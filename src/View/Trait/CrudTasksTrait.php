@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -87,6 +87,18 @@ trait CrudTasksTrait
 				'class'   => 'btn btn-secondary border-light',
 				'onClick' => 'akeeba.System.submitForm(\'' . ($params['task'] ?? 'edit') . '\')',
 				'icon'    => 'fa fa-pen-to-square',
+			],
+			'batch' => [
+				'id'      => 'batch',
+				'title'   => $this->getLanguage()->text('PANOPTICON_BTN_BATCH'),
+				'class'   => 'btn btn-secondary border-light',
+				'onClick' => json_encode(
+					[
+						'data-bs-toggle' => 'modal',
+						'data-bs-target' => '#batchModal'
+					]
+				),
+				'icon'    => 'fa fa-solid fa-square',
 			],
 			'copy' => [
 				'id'      => 'copy',

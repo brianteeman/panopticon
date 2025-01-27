@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -143,6 +143,20 @@ class PassKeys
 			// Message to display
 			$preMessage = $this->getLanguage()->text('PANOPTICON_MFA_PASSKEYS_LBL_INSTRUCTIONS');
 		}
+
+		// Render the pre-message in a properly padded container
+		$preMessage = (new FakeView(
+			$this->getContainer(),
+			[
+				'name' => 'Passkeymfa',
+			]
+		))
+			->loadAnyTemplate(
+				'Passkeysmfa/pre_message',
+				[
+					'preMessage' => $preMessage,
+				]
+			);
 
 		return [
 			'default_title' => $this->getLanguage()->text('PANOPTICON_MFA_PASSKEYS_LBL_DISPLAYEDAS'),

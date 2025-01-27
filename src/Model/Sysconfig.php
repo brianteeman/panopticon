@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -9,7 +9,9 @@ namespace Akeeba\Panopticon\Model;
 
 defined('AKEEBA') || die;
 
+use Akeeba\Panopticon\Library\Enumerations\CMSType;
 use Awf\Mvc\Model;
+use Awf\User\User;
 use Complexify\Complexify;
 use DateTimeZone;
 use Exception;
@@ -125,11 +127,14 @@ class Sysconfig extends Model
 
 			$db    = $this->container->db;
 			$query =
-				$db->getQuery(true)->select($db->quoteName('config'))->from($db->quoteName('#__sites'))->where($db->quoteName('enabled') . ' = 1');
+				$db->getQuery(true)
+					->select($db->quoteName('config'))
+					->from($db->quoteName('#__sites'))
+					->where($db->quoteName('enabled') . ' = 1');
 
 			if (!empty($siteId))
 			{
-				$query->where($db->quoteName('id') . ' = ' . (int)$siteId);
+				$query->where($db->quoteName('id') . ' = ' . (int) $siteId);
 			}
 
 			$iterator = $db->setQuery($query)->getIterator();
@@ -157,21 +162,52 @@ class Sysconfig extends Model
 					continue;
 				}
 
+				$cmsType = $config?->cmsType ?? CMSType::JOOMLA->value;
+
 				foreach ($config?->extensions?->list ?? [] as $ext)
 				{
-					$extKey = $this->getExtensionShortname($ext->type, $ext->element, $ext->folder, $ext->client_id);
-
-					if (empty($extKey) || in_array($extKey, self::EXCLUDED_EXTENSIONS))
+					switch ($cmsType)
 					{
-						continue;
-					}
+						default:
+						case CMSType::UNKNOWN->value:
+							continue 2;
 
-					if ($ext->element === 'pkg_panopticon')
-					{
-						$preferences[$extKey] = 'major';
+						case CMSType::WORDPRESS->value:
+							$extKey = (($ext->type ?? null) === 'plugin' ? 'plg_' : 'tpl_')
+								. str_replace('/', '_', $ext->extension_id ?? '');
+
+							if (empty($ext->extension_id ?? ''))
+							{
+								continue 2;
+							}
+
+							if (($ext->element ?? '') === 'panopticon.php')
+							{
+								$preferences[$extKey] = 'major';
+							}
+
+							$ext->client_id = 0;
+
+							break;
+
+						case CMSType::JOOMLA->value:
+							$extKey = $this->getExtensionShortname($ext->type, $ext->element, $ext->folder, $ext->client_id);
+
+							if (empty($extKey) || in_array($extKey, self::EXCLUDED_EXTENSIONS))
+							{
+								continue 2;
+							}
+
+							if ($ext->element === 'pkg_panopticon')
+							{
+								$preferences[$extKey] = 'major';
+							}
+
+							break;
 					}
 
 					$extensions[$extKey] = (object)[
+						'cmsType'     => $cmsType,
 						'element'     => $ext->element,
 						'type'        => $ext->type,
 						'folder'      => $ext->folder,
@@ -185,7 +221,14 @@ class Sysconfig extends Model
 				}
 			}
 
-			uasort($extensions, fn($a, $b) => $a->name <=> $b->name);
+			uasort($extensions, function($a, $b) {
+				if ($a->cmsType !== $b->cmsType)
+				{
+					return $a->cmsType <=> $b->cmsType;
+				}
+
+				return $a->name <=> $b->name;
+			});
 
 			return $extensions;
 		}, $beta);
@@ -207,12 +250,20 @@ class Sysconfig extends Model
 			fn($v) => is_string($v) && in_array($v, ['', 'email', 'none', 'major', 'minor', 'patch'])
 		);
 
-		// Filter the data keys
-		$data = array_filter(
-			$data,
-			[$this, 'isvalidShortname'],
-			ARRAY_FILTER_USE_KEY
-		);
+		/**
+		 * Filter the data keys
+		 *
+		 * REMOVED – Because some developers suck.
+		 *
+		 * The Astroid Framework, for example, installs as a library BUT its extension name is `astroid`, not
+		 * `lib_astroid`. Unfortunately, Joomla! sucks at enforcing its own naming rules, so we have to accept whatever
+		 * the user throws at us and hope for the best :(
+		 */
+//		$data = array_filter(
+//			$data,
+//			[$this, 'isvalidShortname'],
+//			ARRAY_FILTER_USE_KEY
+//		);
 
 		if (empty($data))
 		{
@@ -273,12 +324,12 @@ class Sysconfig extends Model
 	 *
 	 * @return  string|null
 	 */
-	public function getExtensionShortname(string $type, string $element, ?string $folder, int $client_id): ?string
+	public function getExtensionShortname(string $type, ?string $element, ?string $folder, int $client_id): ?string
 	{
 		return match ($type)
 		{
 			'component', 'file', 'files', 'library', 'package' => $element,
-			'plugin' => 'plg_' . ($folder ?? 'unknown') . '_' . $element,
+			'plugin' => 'plg_' . ($folder ?? 'unknown') . ($element === null ? '' : '_') . ($element ?? ''),
 			'module' => ($client_id === 0 ? 'a' : '') . $element,
 			'template' => ($client_id === 0 ? 'atpl_' : 'tpl_') . $element,
 			default => null,
@@ -330,6 +381,51 @@ class Sysconfig extends Model
 
 		return false;
 	}
+
+	public function getUptimeOptions()
+	{
+		$results = $this->getContainer()->eventDispatcher->trigger('onGetUptimeProvider');
+		$results = array_filter($results, fn($x) => is_array($x) && !empty($x));
+
+		return array_reduce(
+			$results,
+			fn(array $carry, array $item) => array_merge($carry, $item),
+			[
+				'none' => 'PANOPTICON_SYSCONFIG_OPT_UPTIME_NONE',
+			]
+		);
+	}
+
+	/**
+	 * Get the user groups which can be applied by the given user to this site
+	 *
+	 * @param   User|null  $user  The user. NULL for currently logged in user.
+	 *
+	 * @return  array Keyed array of id=>title, i.e. [id=>title, ...]
+	 * @since   1.2.3
+	 */
+	public function getGroupsForSelect(?User $user = null, bool $includeEmpty = false): array
+	{
+		$db    = $this->getContainer()->db;
+		$query = $db->getQuery(true)
+			->select(
+				[
+					$db->quoteName('id'),
+					$db->quoteName('title'),
+				]
+			)
+			->from($db->quoteName('#__groups'));
+
+		$ret = array_map(fn($x) => $x->title, $db->setQuery($query)->loadObjectList('id') ?: []);
+
+		if ($includeEmpty)
+		{
+			$ret[''] = $this->getLanguage()->text('PANOPTICON_SITES_LBL_GROUPS_PLACEHOLDER');
+		}
+
+		return $ret;
+	}
+
 
 	/**
 	 * Returns the extension update preferences, global or per site.

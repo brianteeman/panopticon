@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -15,8 +15,6 @@ use Akeeba\Panopticon\Factory;
 use Akeeba\Panopticon\Library\Logger\ForkedLogger;
 use Akeeba\Panopticon\Library\Task\TasksPausedTrait;
 use Akeeba\Panopticon\Model\Task;
-use Awf\Date\Date;
-use Awf\Mvc\Model;
 use Awf\Timer\Timer;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -132,6 +130,8 @@ class TaskRun extends AbstractCommand
 	protected function configure()
 	{
 		$this
-			->addOption('loop', 'l', InputOption::VALUE_NEGATABLE, 'Enter a wait loop if no tasks exist?', false);
+			->addOption('loop', 'l', InputOption::VALUE_NEGATABLE, 'Enter a wait loop if no tasks exist?', false)
+			->addOption('dummy', 'd', InputOption::VALUE_OPTIONAL,
+			'This value is ignored (read the CRON job documentation)', 0);
 	}
 }

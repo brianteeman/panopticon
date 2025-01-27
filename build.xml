@@ -2,7 +2,7 @@
 
 <!--
   ~ @package   panopticon
-  ~ @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+  ~ @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
   ~ @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
   -->
 
@@ -44,6 +44,7 @@
         <exclude name="assets/**" />
         <exclude name="build/**" />
         <exclude name="documentation/**" />
+        <exclude name="docker-testing/**" />
         <exclude name="node_modules/**" />
         <exclude name="release/**" />
 
@@ -61,6 +62,8 @@
         <exclude name="composer.json" />
         <exclude name="composer.lock" />
         <exclude name="config.php" />
+        <exclude name="config.php.*" />
+        <exclude name="config.bak*" />
         <exclude name="docker-*.yml" />
         <exclude name="docker-run.sh" />
         <exclude name="Dockerfile" />
@@ -79,16 +82,23 @@
         <exclude name="media/webfonts/.gitkeep" />
 
         <!-- Exclude cache, log, tmp files -->
-        <exclude name="cache/**" />
-        <include name="cache/.htaccess" />
-        <include name="cache/web.config" />
+        <exclude name="cache/admintools/**" />
+        <exclude name="cache/akeebabackup/**" />
+        <exclude name="cache/db_backups/**" />
+        <exclude name="cache/extensions/**" />
+        <exclude name="cache/favicon/**" />
+        <exclude name="cache/http/**" />
+        <exclude name="cache/system/**" />
+        <exclude name="cache/whois/**" />
 
         <exclude name="log/*.log" />
         <exclude name="log/*.php" />
         <exclude name="log/*.gz" />
 
         <exclude name="tmp/compiled_templates/**" />
+        <exclude name="tmp/session/**" />
 
+        <exclude name="user_code/ViewTemplates/**" />
         <exclude name="user_code/*.php" />
         <exclude name="user_code/*.pem" />
         <exclude name="user_code/*.json" />
@@ -116,6 +126,8 @@
 
         <exclude name="vendor/akeeba/json-backup-api/.idea/**" />
         <exclude name="vendor/akeeba/json-backup-api/composer.lock" />
+
+        <exclude name="vendor/akeeba/phpfinder/composer.lock" />
 
         <exclude name="vendor/akeeba/stats_collector/.idea/**" />
         <exclude name="vendor/akeeba/stats_collector/.gitignore" />
@@ -174,6 +186,16 @@
         <exclude name="vendor/guzzlehttp/promises/CHANGELOG.md" />
 
         <exclude name="vendor/guzzlehttp/psr-7/CHANGELOG.md" />
+
+        <exclude name="vendor/io-developer/php-whois/.devcontainer/**" />
+        <exclude name="vendor/io-developer/php-whois/.github/**" />
+        <exclude name="vendor/io-developer/php-whois/bin/**" />
+        <exclude name="vendor/io-developer/php-whois/tests/**" />
+        <exclude name="vendor/io-developer/php-whois/CODE_OF_CONDUCT.md" />
+        <exclude name="vendor/io-developer/php-whois/docker-compose.yml" />
+        <exclude name="vendor/io-developer/php-whois/Dockerfile" />
+        <exclude name="vendor/io-developer/php-whois/run-tests.sh" />
+        <exclude name="vendor/io-developer/php-whois/TESTS.md" />
 
         <exclude name="vendor/jfcherng/php-color-output/.php-cs-fixer.dist.php" />
         <exclude name="vendor/jfcherng/php-color-output/demo.php" />
@@ -267,6 +289,7 @@
 
         <!-- symfony/polyfill-ctype: nothing to remove -->
         <!-- symfony/polyfill-intl-grapheme: nothing to remove -->
+        <!-- symfony/polyfill-intl-idn: nothing to remove -->
         <!-- symfony/polyfill-intl-normalizer: nothing to remove -->
         <!-- symfony/polyfill-mbstring: nothing to remove -->
         <!-- symfony/polyfill-php80: nothing to remove -->
@@ -317,7 +340,7 @@
     <target name="setup-properties" description="Set up version and build properties">
         <!-- Initialize the build.date timestamp -->
         <tstamp>
-            <format property="build.date" pattern="%Y-%m-%d"/>
+            <format property="build.date" pattern="yyyy-MM-dd" />
         </tstamp>
 
         <!-- Initialize the version if it's not set -->

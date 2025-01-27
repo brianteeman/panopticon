@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -10,6 +10,7 @@ namespace Akeeba\Panopticon\Application;
 use AConfig;
 use Akeeba\Panopticon\Factory;
 use Akeeba\Panopticon\Library\User\User;
+use Akeeba\Panopticon\Model\Loginfailures;
 use Awf\Registry\Registry;
 use Awf\Utils\Buffer;
 use Awf\Utils\Ip;
@@ -19,6 +20,7 @@ use ReflectionException;
 use ReflectionObject;
 use Symfony\Component\ErrorHandler\ErrorHandler;
 use Symfony\Component\ErrorHandler\ErrorRenderer\HtmlErrorRenderer;
+use Throwable;
 
 defined('AKEEBA') || die;
 
@@ -39,6 +41,8 @@ final class BootstrapUtilities
 	 * @since 1.0.3
 	 */
 	static $tempCaCert = false;
+
+	private static $secret = null;
 
 	/**
 	 * Asserts that the server meets the minimum PHP version requirement
@@ -174,6 +178,12 @@ final class BootstrapUtilities
 	 */
 	public static function hasConfiguration(bool $dotEnvOnly = false): bool
 	{
+		// Special case: I am containerised, and PANOPTICON_USING_ENV is 1
+		if (defined('APATH_IN_DOCKER') && constant('APATH_IN_DOCKER') && ($_ENV['PANOPTICON_USING_ENV'] ?? 0))
+		{
+			return true;
+		}
+
 		$environment = $_SERVER['PANOPTICON_ENVIRONMENT'] ?? $_ENV['PANOPTICON_ENVIRONMENT'] ?? 'production';
 
 		$filePaths = [
@@ -339,6 +349,77 @@ final class BootstrapUtilities
 	}
 
 	/**
+	 * Make sure we have a secret key set up for this installation.
+	 *
+	 * If the application is not configured yet, the secret is stored in tmp/secret.php.
+	 *
+	 * If the application is configured, we check if we need to transcribe the secret to the config.php file. In case a
+	 * .env file is being used we cannot write the secret. In this case, we just transcribe the secret to the runtime
+	 * application configuration. The secret will be stored in the tmp/secret.php file.
+	 *
+	 * @return void
+	 * @throws \Random\RandomException
+	 */
+	public static function applySecret()
+	{
+		// Do I already have a secret, e.g. through user code?
+		if (self::$secret)
+		{
+			return;
+		}
+
+		// Do I have a configured secret?
+		$secret = trim(self::getInitialConfiguration()->get('secret', null) ?? '');
+
+		if (!empty($secret))
+		{
+			return;
+		}
+
+		// Do I have a temporary file defining a secret?
+		if (file_exists(APATH_TMP . '/secret.php'))
+		{
+			require_once APATH_TMP . '/secret.php';
+		}
+
+		if (defined('AKEEBA_SECRET'))
+		{
+			return;
+		}
+
+		// Create a new secret and save it into a temporary file.
+		$randomStringGenerator = function(int $length): string {
+			$allCharacters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+			$baseLength    = \strlen($allCharacters);
+			$outString     = '';
+			$sourceBytes   = random_bytes($length + 1);
+			$baseShift     = \ord($sourceBytes[0]);
+
+			for ($i = 1; $i <= $length; ++$i)
+			{
+				$outString .= $allCharacters[($baseShift + \ord($sourceBytes[$i])) % $baseLength];
+				$baseShift += \ord($sourceBytes[$i]);
+			}
+
+			return $outString;
+		};
+
+		$secret       = $randomStringGenerator(64);
+		self::$secret = $secret;
+
+		$fileContent = <<< PHP
+<?php
+defined('AKEEBA') or die;
+if (!defined('AKEEBA_SECRET')) {
+	define('AKEEBA_SECRET', '{$secret}');
+}
+
+PHP;
+
+		file_put_contents(APATH_TMP . '/secret.php', $fileContent);
+	}
+
+	/**
 	 * Loads the application configuration, if it exists.
 	 *
 	 * @return  void
@@ -352,7 +433,33 @@ final class BootstrapUtilities
 			return;
 		}
 
-		Factory::getContainer()->appConfig->loadConfiguration();
+		$appConfig = Factory::getContainer()->appConfig;
+		$appConfig->loadConfiguration();
+
+		// Transfer the secret to the application configuration if necessary
+		$deleteOld = !empty(self::$secret);
+
+		if (self::$secret && !$appConfig->get('secret'))
+		{
+			$appConfig->set('secret', self::$secret);
+
+			if ($appConfig->isReadWrite())
+			{
+				try
+				{
+					$appConfig->saveConfiguration();
+				}
+				catch (\Exception $e)
+				{
+					$deleteOld = false;
+				}
+			}
+		}
+
+		if ($deleteOld && @file_exists(APATH_TMP . '/secret.php'))
+		{
+			@unlink(APATH_TMP . '/secret.php');
+		}
 	}
 
 	/**
@@ -390,6 +497,68 @@ final class BootstrapUtilities
 
 		$language->loadLanguage('en-GB');
 		$language->loadLanguage($langCode);
+	}
+
+	public static function mySQLUseGMT()
+	{
+		try
+		{
+			Factory::getContainer()
+				->db
+				->setQuery("SET @@session.time_zone = '+0:00'")
+				->execute();
+		}
+		catch (Throwable $e)
+		{
+			// Ignore it if this fails.
+		}
+	}
+
+	public static function evaluateIPBlocking()
+	{
+		/** @var Loginfailures $loginfailures */
+		$loginfailures = Factory::getContainer()->mvcFactory->makeModel('Loginfailures');
+
+		try
+		{
+			$isIPBlocked = $loginfailures->isIPBlocked();
+		}
+		catch (\Exception $e)
+		{
+			return;
+		}
+
+		if (!$isIPBlocked)
+		{
+			return;
+		}
+
+			header('HTTP/1.0 403 Forbidden');
+
+		@include APATH_THEMES . '/system/forbidden.html.php';
+
+		exit();
+	}
+
+	/**
+	 * Addresses MySQL errors about the sort buffer being too short, especially when sending email..
+	 *
+	 * @return  void
+	 * @since   1.1.0
+	 */
+	public static function workaroundMySQLSortBufferSize(): void
+	{
+		try
+		{
+			Factory::getContainer()
+				->db
+				->setQuery('SET sort_buffer_size = 256000000')
+				->execute();
+		}
+		catch (Throwable $e)
+		{
+			// Ignore it if this fails.
+		}
 	}
 
 	/**
@@ -520,7 +689,13 @@ PHP, $sourceCode
 			require_once APATH_CONFIGURATION . '/config.php';
 			ob_end_clean();
 
-			/** @noinspection PhpUndefinedClassInspection */
+			if (!class_exists(\AConfig::class))
+			{
+				$registry = null;
+
+				return $registry;
+			}
+
 			$registry->loadObject(new AConfig());
 		}
 

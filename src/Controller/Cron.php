@@ -1,7 +1,7 @@
 <?php
 /**
  * @package   panopticon
- * @copyright Copyright (c)2023-2024 Nicholas K. Dionysopoulos / Akeeba Ltd
+ * @copyright Copyright (c)2023-2025 Nicholas K. Dionysopoulos / Akeeba Ltd
  * @license   https://www.gnu.org/licenses/agpl-3.0.txt GNU Affero General Public License, version 3 or later
  */
 
@@ -11,7 +11,6 @@ defined('AKEEBA') || die;
 
 use Akeeba\Panopticon\Helper\HttpResponseCodeTrait;
 use Akeeba\Panopticon\Model\Task;
-use Awf\Date\Date;
 use Awf\Mvc\Controller;
 use Awf\Timer\Timer;
 use Throwable;
