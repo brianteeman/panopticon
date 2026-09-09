@@ -1,6 +1,4 @@
-The software is provided free of charge. Personalised support and custom development for it is not.
-
-If you want personalised support from the maintainers please purchase a subscription [on our site](akeeba.com) and file a support ticket on our site's Support ticket system. The proceeds from the subscriptions go towards continued development and maintenance of this software.
+The software is provided free of charge. Support is on a best-effort basis.
 
 ## Community Support
 

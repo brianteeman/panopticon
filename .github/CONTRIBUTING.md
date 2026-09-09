@@ -23,7 +23,7 @@ Any feature implemented requires a major time commitment from the maintainers. I
 
 If you are sure that the impact is justified, please open an Issue and make your case. Explain what you are trying to do, why you believe it is not currently possible, and how you envision your use case would be made possible. Do explain how expect the implementation of this feature to affect other users.
 
-Maintainers have the last word, even if you plan to implement this feature yourself. If we believe that there will be a negative impact to other users or our time management we might decide against a feature. We might decide against a feature if we believe it's not relevant to the direction we want the software to take, consider it out of scope for this software, or consider it as having a negative effect to our business.
+Maintainers have the last word, even if you plan to implement this feature yourself. If we believe that there will be a negative impact to other users or our time management we might decide against a feature. We might decide against a feature if we believe it's not relevant to the direction we want the software to take, or consider it out of scope for this software.
 
 ## Pull Requests
 
