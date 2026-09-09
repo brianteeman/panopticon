@@ -30,7 +30,7 @@
 		}
 	],
 	"require": {
-		"php": ">=8.3",
+		"php": ">=8.3 <8.7",
 		"ext-curl": "*",
 		"ext-dom": "*",
 		"ext-json": "*",
@@ -39,7 +39,7 @@
 		"ext-simplexml": "*",
 		"ext-zip": "*",
 		"akeeba/awf": "dev-development",
-		"akeeba/json-backup-api": "dev-main",
+		"akeeba/json-backup-api": "^1.1.0",
 		"akeeba/phpfinder": "^1.0.0",
 		"akeeba/stats_collector": "dev-main",
 		"cesargb/php-log-rotation": "^2.7.1",
@@ -88,7 +88,7 @@
 		"process-timeout": 600,
 		"optimize-autoloader": true,
 		"platform": {
-			"php": "8.3.0"
+			"php": "8.3.999"
 		},
 		"allow-plugins": {
 			"php-http/discovery": true

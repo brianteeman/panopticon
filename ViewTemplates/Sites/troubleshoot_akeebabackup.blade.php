@@ -6,6 +6,7 @@
  */
 
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupInvalidBody;
+use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNoCredentials;
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNoEndpoint;
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNotInstalled;
 use Akeeba\Panopticon\Model\Exception\AkeebaBackupIsNotPro;
@@ -66,6 +67,22 @@ $isJoomla3       = str_ends_with(rtrim($this->item->url, '/'), '/panopticon_api'
         @endunless
         @lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_INVALIDAPI_OR_CHECK_ERRORS')
     </p>
+@elseif($connectionError instanceof AkeebaBackupNoCredentials)
+    {{-- Neither an Akeeba Backup Secret Word nor a Joomla! API token is available --}}
+    <p class="fw-semibold">
+        @lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_NOCREDENTIALS_HEAD')
+    </p>
+    <p>
+        @lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_NOCREDENTIALS_BODY')
+    </p>
+    <ul>
+        @if($this->item->cmsType() === CMSType::JOOMLA)
+            <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_NOCREDENTIALS_TIP_1')</li>
+            <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_NOCREDENTIALS_TIP_2')</li>
+        @else
+            <li>@lang('PANOPTICON_SITES_LBL_AKEEBABACKUP_CANNOTCONNECT_TIP_2_WP')</li>
+        @endif
+    </ul>
 @elseif($connectionError instanceof AkeebaBackupNoEndpoint)
     {{-- Cannot find an Akeeba Backup JSON API endpoint to connect to --}}
     <p class="fw-semibold">

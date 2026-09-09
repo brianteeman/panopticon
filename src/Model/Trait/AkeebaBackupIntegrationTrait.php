@@ -16,6 +16,7 @@ use Akeeba\BackupJsonApi\HttpAbstraction\HttpClientInterface;
 use Akeeba\BackupJsonApi\Options as JsonApiOptions;
 use Akeeba\Panopticon\Container;
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupInvalidBody;
+use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNoCredentials;
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNoEndpoint;
 use Akeeba\Panopticon\Exception\AkeebaBackup\AkeebaBackupNotInstalled;
 use Akeeba\Panopticon\Library\Cache\CallbackController;
@@ -28,6 +29,7 @@ use Akeeba\Panopticon\Model\Exception\AkeebaBackupNoInfoException;
 use Akeeba\Panopticon\Model\Site;
 use Akeeba\Panopticon\Model\Task;
 use Awf\Mvc\DataModel\Collection;
+use Awf\Uri\Uri;
 use Awf\User\User;
 use Composer\CaBundle\CaBundle;
 use DateTimeZone;
@@ -201,29 +203,51 @@ trait AkeebaBackupIntegrationTrait
 			// Find an endpoint for the Akeeba Backup JSON API
 			$session->set('testconnection.akeebabackup.step', 'Find the most suitable Akeeba Backup JSON API endpoint');
 
-			// Auto-detect best endpoint.
-			$endpoints                = array_merge(
-				$info?->endpoints?->v2 ?? [],
-				$info?->endpoints?->v1 ?? []
-			);
+			// Auto-detect the best way to connect.
+			$credentials              = $this->getAkeebaBackupCredentials($info);
+			$candidates               = $this->getAkeebaBackupConnectionCandidates($info);
 			$newEndpointConfiguration = null;
 
-			if (empty($endpoints))
+			if (empty($candidates))
 			{
 				$throwThis ??= new AkeebaBackupIsNotPro();
 			}
 
-			foreach ($endpoints as $someEndpoint)
+			/**
+			 * Neither credential is available, so there is nothing to authenticate with.
+			 *
+			 * This is a real possibility now that the Secret Word is deprecated. The connector reports the Secret Word
+			 * it found or provisioned, and failing to provision one is no longer fatal on its side — a site may
+			 * legitimately end up without one, as long as we have a Joomla! API token to present instead.
+			 */
+			if (empty($credentials['secret']) && empty($credentials['token']))
 			{
-				$options = new JsonApiOptions(
-					[
-						'capath' => defined('AKEEBA_CACERT_PEM') ? AKEEBA_CACERT_PEM
-							: CaBundle::getBundledCaBundlePath(),
-						'ua'     => 'panopticon/' . AKEEBA_PANOPTICON_VERSION,
-						'host'   => $someEndpoint,
-						'secret' => $info?->secret,
-					]
-				);
+				$candidates = [];
+
+				$throwThis ??= new AkeebaBackupNoCredentials();
+			}
+
+			foreach ($candidates as $candidate)
+			{
+				try
+				{
+					$options = new JsonApiOptions(
+						array_merge(
+							[
+								'capath' => defined('AKEEBA_CACERT_PEM') ? AKEEBA_CACERT_PEM
+									: CaBundle::getBundledCaBundlePath(),
+								'ua'     => 'panopticon/' . AKEEBA_PANOPTICON_VERSION,
+							],
+							$credentials,
+							$candidate
+						)
+					);
+				}
+				catch (Throwable)
+				{
+					// A candidate the client refuses to even describe is a candidate we cannot try.
+					continue;
+				}
 
 				$httpClient = new HttpClientGuzzle($options);
 				$apiClient  = new Connector($httpClient);
@@ -778,6 +802,156 @@ trait AkeebaBackupIntegrationTrait
 	}
 
 	/**
+	 * Get the credentials we can present to this site's Akeeba Backup JSON API.
+	 *
+	 * There are two of them, and either is enough on its own.
+	 *
+	 * The Secret Word is the only thing the v1 and v2 APIs understand, and the only thing Akeeba Backup for
+	 * WordPress and Akeeba Solo understand at all. It is deprecated — removal is planned for October 2027 — but it
+	 * cannot be dropped on our side for exactly those reasons, plus one more: token authentication on the v3 API was
+	 * unusable before Akeeba Backup 10.4.0.
+	 *
+	 * The v3 API also accepts a Joomla! API token, and that is what it prefers. A token identifies a Joomla! user
+	 * account whose privileges Akeeba Backup 10.4.0 and later enforce per API method, so a site can hand us a
+	 * least-privilege account; the Secret Word, by contrast, is an unscoped grant over the whole component.
+	 *
+	 * We do not ask the operator for that token, because the site has already given us one: the Joomla! API token
+	 * Panopticon authenticates to the Panopticon connector with. WordPress sites are excluded — their API key is a
+	 * Panopticon-specific token, not a Joomla! API token, and there is no v3 API on WordPress to present it to.
+	 *
+	 * @param   object|null  $info  The Akeeba Backup information reported by the Panopticon connector.
+	 *
+	 * @return  array{secret: string, token: string}
+	 * @since   2.4.0
+	 */
+	private function getAkeebaBackupCredentials(?object $info): array
+	{
+		$secret = trim((string) ($info?->secret ?? ''));
+		$token  = '';
+
+		if ($this->cmsType() === CMSType::JOOMLA)
+		{
+			$token = trim((string) ($this->getConfig()->get('config.apiKey', '') ?? ''));
+		}
+
+		return [
+			'secret' => $secret,
+			'token'  => $token,
+		];
+	}
+
+	/**
+	 * Get the ways of connecting to this site's Akeeba Backup JSON API, in the order we will try them.
+	 *
+	 * Each entry is a set of overrides for the JSON API client's options, describing one way to connect. The newest
+	 * API version comes first: v3 is the only one which is not deprecated, and the only one which can authenticate
+	 * with anything other than the Secret Word.
+	 *
+	 * @param   object|null  $info  The Akeeba Backup information reported by the Panopticon connector.
+	 *
+	 * @return  array[]
+	 * @since   2.4.0
+	 */
+	private function getAkeebaBackupConnectionCandidates(?object $info): array
+	{
+		$candidates = [];
+		$v3Options  = $this->getAkeebaBackupV3Options($info);
+
+		if ($v3Options !== null)
+		{
+			$candidates[] = $v3Options;
+		}
+
+		foreach ([2, 1] as $apiVersion)
+		{
+			foreach ((array) ($info?->endpoints?->{'v' . $apiVersion} ?? []) as $endpoint)
+			{
+				$endpoint = trim((string) $endpoint);
+
+				if ($endpoint === '')
+				{
+					continue;
+				}
+
+				/**
+				 * Pin the API version. Left to guess, the client assumes the newest version the endpoint could
+				 * possibly speak, which is v3 for anything that is not obviously Akeeba Solo or WordPress — and that
+				 * includes the v2 route the connector reports inside Joomla's API application, which carries no `view`
+				 * parameter to give the game away.
+				 *
+				 * The token goes with it. Neither legacy version has any idea what a Joomla! API token is, so carrying
+				 * one into these options would only store a credential which can never be presented.
+				 */
+				$candidates[] = [
+					'host'       => $endpoint,
+					'apiVersion' => $apiVersion,
+					'token'      => '',
+				];
+			}
+		}
+
+		return $candidates;
+	}
+
+	/**
+	 * Get the JSON API client options describing this site's Akeeba Backup JSON API v3 endpoint.
+	 *
+	 * @param   object|null  $info  The Akeeba Backup information reported by the Panopticon connector.
+	 *
+	 * @return  array|null  NULL when this site cannot speak the v3 API at all.
+	 * @since   2.4.0
+	 */
+	private function getAkeebaBackupV3Options(?object $info): ?array
+	{
+		// The v3 API is a route in Joomla's API application. It does not exist anywhere else.
+		if ($this->cmsType() !== CMSType::JOOMLA)
+		{
+			return null;
+		}
+
+		/**
+		 * Does this site speak the v3 API at all?
+		 *
+		 * Connectors which know about the v3 API list an endpoint for it. Older ones do not, but they still report the
+		 * Akeeba Backup API version they found, and 3 means the same thing.
+		 */
+		$speaksV3 = !empty((array) ($info?->endpoints?->v3 ?? [])) || ((int) ($info?->api ?? 0)) >= 3;
+
+		if (!$speaksV3)
+		{
+			return null;
+		}
+
+		/**
+		 * Build the endpoint from the site's own URL rather than from the one the connector reports.
+		 *
+		 * The v3 API is a route in the very API application we just asked for this information, so the two are the same
+		 * place and taking the site's word for it gains us nothing. It costs us something, though: the site URL is
+		 * checked against the operator's forbidden IP ranges every time the site is saved, and a URL parsed out of a
+		 * response body is not. A compromised site naming somebody else's host would otherwise have us deliver a
+		 * Joomla! API token there.
+		 *
+		 * The two options are split the way the client expects them: a bare host, and the path to Joomla's API
+		 * application relative to it. The client joins them back together with the API route itself, so handing it the
+		 * whole URL as the host would have it ask the site for the API application's path twice over.
+		 */
+		$uri         = new Uri(rtrim($this->getAPIEndpointURL(), '/') . '/index.php');
+		$host        = $uri->toString(['scheme', 'user', 'pass', 'host', 'port']);
+		$apiEndpoint = trim($uri->getPath() ?? '', '/');
+
+		if (empty($host) || empty($apiEndpoint))
+		{
+			return null;
+		}
+
+		return [
+			'host'        => $host,
+			'apiEndpoint' => $apiEndpoint,
+			'apiVersion'  => 3,
+		];
+	}
+
+	/**
 	 * Get the cache controller for requests to Akeeba Backup
 	 *
 	 * @return  CallbackController
@@ -825,6 +999,22 @@ trait AkeebaBackupIntegrationTrait
 		}
 
 		$connectionOptions['capath'] = defined('AKEEBA_CACERT_PEM') ? AKEEBA_CACERT_PEM : null;
+
+		/**
+		 * Refresh the Joomla! API token.
+		 *
+		 * The token stored alongside the connection options is a copy of the site's own API token, taken when the
+		 * connection was last auto-detected. Rotating the site's token would otherwise leave the backup integration
+		 * presenting a dead credential until something triggers auto-detection again.
+		 *
+		 * We only refresh a token which is already there. Auto-detection blanks it when it settled on the Secret Word
+		 * instead, and putting one back would flip every request to an authentication mode we already know this site
+		 * rejects — the server ignores the Secret Word whenever a token accompanies it.
+		 */
+		if (!empty($connectionOptions['token'] ?? null) && $this->cmsType() === CMSType::JOOMLA)
+		{
+			$connectionOptions['token'] = $config->get('config.apiKey', '') ?: $connectionOptions['token'];
+		}
 
 		if ($logger)
 		{
